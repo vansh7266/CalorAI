@@ -14,6 +14,7 @@ Providers:
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from typing import TypeVar
 
@@ -30,6 +31,13 @@ _Schema = TypeVar("_Schema", bound=BaseModel)
 _HEADER_AUTH_PLACEHOLDER = "header-auth"
 
 
+def _timeout_seconds() -> int:
+    try:
+        return int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))
+    except ValueError:
+        return 60
+
+
 def build_chat_model(
     spec: ModelSpec,
     *,
@@ -37,8 +45,8 @@ def build_chat_model(
     max_tokens: int | None = None,
     streaming: bool = False,
 ) -> BaseChatModel:
-    settings = get_settings()
-    timeout = settings.request_timeout_seconds
+    spec.require_usable()
+    timeout = _timeout_seconds()
 
     if spec.kind in ("openai", "openai_compatible"):
         from langchain_openai import ChatOpenAI

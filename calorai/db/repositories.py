@@ -16,7 +16,7 @@ from calorai.db.records import DailyTotals, Meal, MealItem, MemoryRecord, User
 
 
 def new_id(prefix: str) -> str:
-    return f"{prefix}_{secrets.token_hex(4)}"
+    return f"{prefix}_{secrets.token_hex(6)}"
 
 
 def _utc_now() -> str:
@@ -147,7 +147,7 @@ def get_meals_between(user_id: str, start_date: str, end_date: str) -> list[Meal
 
 
 def get_recent_meals(user_id: str, limit: int = 10) -> list[Meal]:
-    return _get_meals("WHERE user_id = ? AND status = 'active'", (user_id,), order="ORDER BY eaten_at DESC", limit=limit)
+    return _get_meals("WHERE user_id = ? AND status = 'active'", (user_id,), order="ORDER BY eaten_at DESC, created_at DESC, id DESC", limit=limit)
 
 
 def _get_meals(where: str, params: tuple, *, order: str = "ORDER BY eaten_at ASC", limit: int | None = None) -> list[Meal]:
@@ -254,6 +254,80 @@ def remove_item(item_id: str, *, turn_id: str | None = None) -> bool:
         conn.execute("DELETE FROM meal_items WHERE id = ?", (item_id,))
         conn.execute("UPDATE meals SET updated_at = ? WHERE id = ?", (_utc_now(), row["meal_id"]))
         _record_edit(conn, row["meal_id"], "item:remove", row["name"], None, turn_id)
+    return True
+
+
+_EDITABLE_MEAL_FIELDS = {"meal_type", "meal_date", "eaten_at", "description"}
+
+
+def apply_meal_edits(meal_id: str, ops: list[dict], *, turn_id: str | None = None) -> bool:
+    """Apply several validated changes to one meal in a SINGLE transaction - all
+    or nothing. `ops` entries:
+        {"op": "set_quantity", "item_id": ..., "quantity": ...}
+        {"op": "remove_item",  "item_id": ...}
+        {"op": "add_item",     "item": {...}}   # meal_items dict, see _insert_item
+        {"op": "set_field",    "field": "meal_type"|"meal_date"|"eaten_at", "value": ...}
+    After the ops, the meal's description is regenerated from its remaining items,
+    and a meal left with zero items is soft-deleted.
+    """
+    now = _utc_now()
+    with transaction() as conn:
+        meal = conn.execute("SELECT id, status FROM meals WHERE id = ?", (meal_id,)).fetchone()
+        if not meal:
+            return False
+
+        for op in ops:
+            kind = op["op"]
+            if kind == "set_quantity":
+                row = conn.execute(
+                    "SELECT name, quantity FROM meal_items WHERE id = ? AND meal_id = ?",
+                    (op["item_id"], meal_id),
+                ).fetchone()
+                if not row:
+                    raise ValueError("item not in meal")
+                conn.execute("UPDATE meal_items SET quantity = ? WHERE id = ?", (float(op["quantity"]), op["item_id"]))
+                _record_edit(conn, meal_id, f"item:{row['name']}:quantity", str(row["quantity"]), str(op["quantity"]), turn_id)
+            elif kind == "remove_item":
+                row = conn.execute(
+                    "SELECT name FROM meal_items WHERE id = ? AND meal_id = ?", (op["item_id"], meal_id)
+                ).fetchone()
+                if not row:
+                    raise ValueError("item not in meal")
+                conn.execute("DELETE FROM meal_items WHERE id = ?", (op["item_id"],))
+                _record_edit(conn, meal_id, "item:remove", row["name"], None, turn_id)
+            elif kind == "add_item":
+                pos = conn.execute(
+                    "SELECT COALESCE(MAX(position) + 1, 0) AS p FROM meal_items WHERE meal_id = ?", (meal_id,)
+                ).fetchone()["p"]
+                _insert_item(conn, meal_id, op["item"], now, pos)
+                _record_edit(conn, meal_id, "item:add", None, op["item"]["name"], turn_id)
+            elif kind == "set_field":
+                field = op["field"]
+                if field not in _EDITABLE_MEAL_FIELDS:
+                    raise ValueError(f"field '{field}' is not editable")
+                old = conn.execute(f"SELECT {field} FROM meals WHERE id = ?", (meal_id,)).fetchone()[field]
+                conn.execute(f"UPDATE meals SET {field} = ? WHERE id = ?", (op["value"], meal_id))
+                _record_edit(conn, meal_id, field, str(old), str(op["value"]), turn_id)
+            else:
+                raise ValueError(f"unknown op {kind!r}")
+
+        remaining = conn.execute(
+            "SELECT name, quantity, unit FROM meal_items WHERE meal_id = ? ORDER BY position, created_at, id", (meal_id,)
+        ).fetchall()
+
+        if remaining:
+            desc = ", ".join(
+                (f"{int(r['quantity']) if float(r['quantity']).is_integer() else r['quantity']} {r['name']}"
+                 if r["quantity"] != 1 else r["name"])
+                for r in remaining
+            )
+            conn.execute("UPDATE meals SET description = ?, updated_at = ? WHERE id = ?", (desc, now, meal_id))
+        else:
+            # nothing left in the meal - soft-delete it so it stops counting
+            conn.execute("UPDATE meals SET status = 'deleted', updated_at = ? WHERE id = ?", (now, meal_id))
+            _record_edit(conn, meal_id, "status", "active", "deleted", turn_id)
+
+        conn.execute("UPDATE meals SET updated_at = ? WHERE id = ?", (now, meal_id))
     return True
 
 
@@ -404,10 +478,13 @@ def bump_memory_use(mem_id: str) -> None:
 # --- Nutrition cache ---
 
 
-def get_cached_nutrition(name: str) -> dict | None:
+def get_cached_nutrition(name: str, unit: str) -> dict | None:
     conn = get_connection()
     try:
-        row = conn.execute("SELECT * FROM nutrition_cache WHERE name = ?", (name.strip().lower(),)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM nutrition_cache WHERE name = ? AND unit = ?",
+            (name.strip().lower(), unit.strip().lower()),
+        ).fetchone()
         return dict(row) if row else None
     finally:
         conn.close()
@@ -419,8 +496,7 @@ def put_cached_nutrition(name: str, macros: dict, *, source: str = "model") -> N
             """INSERT INTO nutrition_cache
                (name, unit, kcal_per_unit, protein_g_per_unit, carbs_g_per_unit, fat_g_per_unit, source, created_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(name) DO UPDATE SET
-                   unit = excluded.unit,
+               ON CONFLICT(name, unit) DO UPDATE SET
                    kcal_per_unit = excluded.kcal_per_unit,
                    protein_g_per_unit = excluded.protein_g_per_unit,
                    carbs_g_per_unit = excluded.carbs_g_per_unit,
@@ -428,11 +504,11 @@ def put_cached_nutrition(name: str, macros: dict, *, source: str = "model") -> N
                    source = excluded.source""",
             (
                 name.strip().lower(),
-                macros.get("unit", "serving"),
-                float(macros["kcal_per_unit"]),
-                float(macros["protein_g_per_unit"]),
-                float(macros["carbs_g_per_unit"]),
-                float(macros["fat_g_per_unit"]),
+                str(macros.get("unit", "serving")).strip().lower(),
+                max(0.0, float(macros["kcal_per_unit"])),
+                max(0.0, float(macros["protein_g_per_unit"])),
+                max(0.0, float(macros["carbs_g_per_unit"])),
+                max(0.0, float(macros["fat_g_per_unit"])),
                 source,
                 _utc_now(),
             ),

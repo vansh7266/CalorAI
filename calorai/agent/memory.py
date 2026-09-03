@@ -15,6 +15,7 @@ Nothing here stores conversation history. Only durable facts and routines.
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import threading
@@ -144,8 +145,8 @@ def save_memory(
             source_turn_id=ctx.turn_id,
         )
         return {"saved": True, "memory_id": record.id, "kind": kind, "content": content}
-    except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"could not save that: {exc}"}
+    except Exception:  # pragma: no cover - defensive
+        return {"error": "could not save that right now"}
 
 
 @tool
@@ -178,8 +179,8 @@ def recall_memory(query: str) -> dict:
                 for h in hits
             ],
         }
-    except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"could not recall: {exc}"}
+    except Exception:  # pragma: no cover - defensive
+        return {"error": "could not recall that right now"}
 
 
 MEMORY_TOOLS = [save_memory, recall_memory]
@@ -214,13 +215,18 @@ Rules:
 """
 
 
+def _run_reflection_model(prompt: str) -> _Reflection:
+    """The one live call. Seam for tests to stub."""
+    return as_structured(get_worker_model(), _Reflection).invoke(prompt)
+
+
 def run_reflection(user_id: str, turn_id: str, user_text: str, agent_reply: str) -> MemoryRecord | None:
     known_rows = repo.get_active_memory(user_id)
     known = "\n".join(f"- ({r.type}) {r.content}" for r in known_rows) or "(nothing yet)"
     prompt = _REFLECT_PROMPT.format(known=known, user_text=user_text, agent_reply=agent_reply)
 
     try:
-        result: _Reflection = as_structured(get_worker_model(), _Reflection).invoke(prompt)
+        result = _run_reflection_model(prompt)
     except Exception:
         return None
 
@@ -232,23 +238,37 @@ def run_reflection(user_id: str, turn_id: str, user_text: str, agent_reply: str)
         kind = "fact"
 
     try:
+        # Reflection is a model *inference* - store it as inferred so the profile
+        # card marks it "(unconfirmed)" and the agent double-checks before relying
+        # on it. An explicit save_memory tool call is what marks something "stated".
         return repo.upsert_memory(
             user_id=user_id,
             type=kind,
             key=result.key or _derive_key(kind, result.content, None),
             content=result.content,
-            learned_via="stated",
-            confidence=0.8,
+            learned_via="inferred",
+            confidence=0.7,
             source_turn_id=turn_id,
         )
     except Exception:
         return None
 
 
+_inflight: set[threading.Thread] = set()
+
+
+@atexit.register
+def _drain_reflections() -> None:
+    """Give in-flight reflection writes a short window to finish on exit, so a
+    valid memory isn't lost when the user quits right after telling us something."""
+    for t in list(_inflight):
+        t.join(timeout=3.0)
+
+
 def schedule_reflection(user_id: str, turn_id: str, user_text: str, agent_reply: str) -> None:
     """Run the reflection pass off the response path, on a daemon thread so it
-    never delays the reply or blocks a clean exit. Set CALORAI_SYNC_REFLECTION=1
-    to run it inline (used by tests and the eval harness)."""
+    never delays the reply. Set CALORAI_SYNC_REFLECTION=1 to run it inline (used
+    by tests and the eval harness)."""
     if os.getenv("CALORAI_SYNC_REFLECTION") in ("1", "true", "yes"):
         run_reflection(user_id, turn_id, user_text, agent_reply)
         return
@@ -258,5 +278,9 @@ def schedule_reflection(user_id: str, turn_id: str, user_text: str, agent_reply:
             run_reflection(user_id, turn_id, user_text, agent_reply)
         except Exception:
             pass
+        finally:
+            _inflight.discard(threading.current_thread())
 
-    threading.Thread(target=_safe, name="calorai-reflect", daemon=True).start()
+    thread = threading.Thread(target=_safe, name="calorai-reflect", daemon=True)
+    _inflight.add(thread)
+    thread.start()

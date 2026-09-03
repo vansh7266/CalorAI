@@ -1,12 +1,13 @@
 """Entry point for one conversation turn.
 
-Sets the per-turn context, runs the graph for the given thread, and returns the
-agent's reply. `thread_id` is the user id, so each user gets an isolated,
-persisted conversation.
+Sets the per-turn context and runs the graph. The LangGraph thread is always the
+user id, so each user gets an isolated, persisted conversation and a caller can't
+attach one user's context to another user's thread.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from datetime import datetime, timezone
 
@@ -17,6 +18,18 @@ from calorai.agent.formatting import clean_reply, strip_markdown_chunk
 from calorai.agent.graph import build_app
 from calorai.agent.memory import schedule_reflection
 from calorai.agent.recovery import looks_like_leaked_tool_call
+
+logger = logging.getLogger("calorai.agent")
+
+GENERIC_ERROR = "Something went wrong on my end - your logged meals are safe. Please try again."
+
+
+def _source_of(user_text: str, image_path: str | None) -> str:
+    if image_path and user_text.strip():
+        return "image+text"
+    if image_path:
+        return "image"
+    return "text"
 
 
 def _initial_state(user_text: str, *, user_id: str, turn_id: str, timezone_name: str, image_path: str | None) -> dict:
@@ -31,15 +44,17 @@ def _initial_state(user_text: str, *, user_id: str, turn_id: str, timezone_name:
         "timezone_name": timezone_name,
         "user_text": user_text,
         "image_path": image_path,
+        "vision_result": None,
     }
 
 
-def _turn_context(user_id: str, timezone_name: str) -> TurnContext:
+def _turn_context(user_id: str, timezone_name: str, *, image_path: str | None = None, user_text: str = "") -> TurnContext:
     return TurnContext(
         user_id=user_id,
         turn_id=new_turn_id(),
         timezone_name=timezone_name,
         now_utc=datetime.now(timezone.utc),
+        source=_source_of(user_text, image_path),
     )
 
 
@@ -47,16 +62,17 @@ def run_turn(
     user_text: str,
     *,
     user_id: str,
-    thread_id: str | None = None,
+    thread_id: str | None = None,  # accepted for API symmetry; the thread is always the user
     timezone_name: str = "UTC",
     image_path: str | None = None,
 ) -> str:
-    """Run one turn and return the agent's final reply as a string. Never raises."""
-    ctx = _turn_context(user_id, timezone_name)
+    """Run one turn and return the agent's final reply as a string. Never raises.
+    Returns `GENERIC_ERROR` verbatim on failure so callers can detect it."""
+    ctx = _turn_context(user_id, timezone_name, image_path=image_path, user_text=user_text)
     token = set_context(ctx)
     try:
         app = build_app()
-        config = {"configurable": {"thread_id": thread_id or user_id}}
+        config = {"configurable": {"thread_id": user_id}}
         state = _initial_state(
             user_text, user_id=user_id, turn_id=ctx.turn_id, timezone_name=timezone_name, image_path=image_path
         )
@@ -70,7 +86,8 @@ def run_turn(
         schedule_reflection(user_id, ctx.turn_id, user_text, reply)
         return reply
     except Exception:
-        return "Something went wrong on my end - your logged meals are safe. Please try again."
+        logger.exception("run_turn failed for user %s", user_id)
+        return GENERIC_ERROR
     finally:
         reset_context(token)
 
@@ -88,11 +105,11 @@ def stream_turn(
     Only tokens from a final agent message (no tool calls) are yielded; tool-call
     planning turns are held back so the user sees one clean answer.
     """
-    ctx = _turn_context(user_id, timezone_name)
+    ctx = _turn_context(user_id, timezone_name, image_path=image_path, user_text=user_text)
     token = set_context(ctx)
     try:
         app = build_app()
-        config = {"configurable": {"thread_id": thread_id or user_id}}
+        config = {"configurable": {"thread_id": user_id}}
         state = _initial_state(
             user_text, user_id=user_id, turn_id=ctx.turn_id, timezone_name=timezone_name, image_path=image_path
         )
@@ -141,8 +158,9 @@ def stream_turn(
                         yield clean_reply(raw)
                         break
         except Exception:
+            logger.exception("stream_turn failed for user %s", user_id)
             if not streamed:
-                yield "Something went wrong on my end - your logged meals are safe. Please try again."
+                yield GENERIC_ERROR
             raw = streamed
 
         schedule_reflection(user_id, ctx.turn_id, user_text, clean_reply(raw))

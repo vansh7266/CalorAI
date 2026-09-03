@@ -1,11 +1,13 @@
 """Measure response latency for the text path and the image path.
 
-    python benchmarks/latency.py             # default: text x24, image x8
-    python benchmarks/latency.py 40 12        # text x40, image x12
+    python benchmarks/latency.py             # default: text x30, image x8
+    python benchmarks/latency.py 40 16       # text x40, image x16
 
-Reports p50 / p95 / mean per path, time-to-first-token for the text path, and a
-component breakdown (raw text-model call, raw vision call, cached nutrition
-lookup) so the numbers can be reasoned about, not just quoted.
+Reports p50 / p95 / mean per path. Every text turn is streamed so total time and
+time-to-first-token come from the same sample. The component table (raw text
+call, full vision extraction, cached nutrition lookup) lets the numbers be
+reasoned about rather than just quoted. Larger `image` counts give a steadier
+p95 but cost more.
 """
 
 from __future__ import annotations
@@ -62,28 +64,26 @@ def _fresh_db(tag: str) -> None:
     database.init_db(path)
 
 
-def bench_text(runs: int) -> tuple[list[float], list[float]]:
-    from calorai.agent.runner import run_turn, stream_turn
+def bench_text(target_turns: int) -> tuple[list[float], list[float]]:
+    """Measure exactly `target_turns` text turns. Every turn is streamed and its
+    time-to-first-token recorded, so the two samples are the same size."""
+    from calorai.agent.runner import stream_turn
 
     totals: list[float] = []
     ttfts: list[float] = []
-    for r in range(runs):
-        _fresh_db(f"text_{r}")
-        user = repo.create_user("bench", "UTC")
-        for i, msg in enumerate(TEXT_MESSAGES):
-            if i == 0:
-                start = time.time()
-                first = None
-                for chunk in stream_turn(msg, user_id=user.id, thread_id=user.id):
-                    if first is None and chunk.strip():
-                        first = time.time() - start
-                totals.append(time.time() - start)
-                if first is not None:
-                    ttfts.append(first)
-            else:
-                start = time.time()
-                run_turn(msg, user_id=user.id, thread_id=user.id)
-                totals.append(time.time() - start)
+    user = None
+    for n in range(target_turns):
+        if n % len(TEXT_MESSAGES) == 0:
+            _fresh_db(f"text_{n}")
+            user = repo.create_user("bench", "UTC")
+        msg = TEXT_MESSAGES[n % len(TEXT_MESSAGES)]
+        start = time.time()
+        first = None
+        for chunk in stream_turn(msg, user_id=user.id, thread_id=user.id):
+            if first is None and chunk.strip():
+                first = time.time() - start
+        totals.append(time.time() - start)
+        ttfts.append(first if first is not None else time.time() - start)
     return totals, ttfts
 
 
@@ -102,9 +102,7 @@ def bench_image(runs: int) -> list[float]:
 
 
 def bench_components() -> dict[str, float]:
-    from langchain_core.messages import HumanMessage
-
-    from calorai.models.gateway import get_text_model, get_vision_model
+    from calorai.models.gateway import get_text_model
     from calorai.nutrition.resolver import resolve
     from calorai.vision.extract import extract_food_from_image
 
@@ -114,24 +112,20 @@ def bench_components() -> dict[str, float]:
     get_text_model().invoke("Reply with: ok")
     text_call = time.time() - t
 
-    t = time.time()
-    get_vision_model().invoke([HumanMessage(content="Reply with: ok")])
-    vision_call = time.time() - t
-
     resolve("roti")  # warm the cache
     t = time.time()
     resolve("roti")
     cached_nutrition = time.time() - t
 
+    # a real vision-path call goes through image load + resize + the model
     t = time.time()
     extract_food_from_image(str(PROJECT_ROOT / "samples" / "thali.jpeg"))
     vision_extract = time.time() - t
 
     return {
         "raw text-model call": text_call,
-        "raw vision-model call": vision_call,
+        "full vision extraction (load + resize + model)": vision_extract,
         "cached nutrition lookup": cached_nutrition,
-        "full vision extraction": vision_extract,
     }
 
 
@@ -148,12 +142,12 @@ def _stats_row(name: str, values: list[float]) -> tuple[str, ...]:
 
 
 def main() -> int:
-    text_runs = int(sys.argv[1]) if len(sys.argv) > 1 else 24
+    text_runs = int(sys.argv[1]) if len(sys.argv) > 1 else 30
     image_runs = int(sys.argv[2]) if len(sys.argv) > 2 else 8
 
     console.print(f"[dim]benchmarking: text x{text_runs} turns, image x{image_runs} turns...[/dim]")
 
-    text_totals, ttfts = bench_text(text_runs // len(TEXT_MESSAGES) + 1)
+    text_totals, ttfts = bench_text(text_runs)
     image_totals = bench_image(image_runs)
     components = bench_components()
 

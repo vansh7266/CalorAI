@@ -21,6 +21,8 @@ from pydantic import BaseModel, Field
 from calorai.models.gateway import as_structured, get_vision_model
 
 _MAX_EDGE = 1024
+_MAX_BYTES = 20_000_000       # reject files larger than this before decoding
+_MAX_PIXELS = 40_000_000      # ~decompression-bomb guard (Pillow default is 178M)
 _ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 
 
@@ -77,17 +79,20 @@ Do not guess wildly - low confidence is better than a confident wrong answer.
 
 
 def _load_data_uri(path: Path) -> str:
-    from PIL import Image
+    from PIL import Image, ImageOps
 
-    image = Image.open(path)
-    if image.mode in ("P", "RGBA", "LA"):
-        # flatten any transparency onto white so it doesn't become black in JPEG
-        rgba = image.convert("RGBA")
-        canvas = Image.new("RGB", rgba.size, (255, 255, 255))
-        canvas.paste(rgba, mask=rgba.split()[-1])
-        image = canvas
-    else:
-        image = image.convert("RGB")
+    with Image.open(path) as opened:
+        w, h = opened.size
+        if w * h > _MAX_PIXELS:
+            raise ValueError("image has too many pixels")
+        opened = ImageOps.exif_transpose(opened)  # honour camera rotation
+        if opened.mode in ("P", "RGBA", "LA"):
+            # flatten transparency onto white so it doesn't become black in JPEG
+            rgba = opened.convert("RGBA")
+            image = Image.new("RGB", rgba.size, (255, 255, 255))
+            image.paste(rgba, mask=rgba.split()[-1])
+        else:
+            image = opened.convert("RGB")
 
     image.thumbnail((_MAX_EDGE, _MAX_EDGE))
     buffer = io.BytesIO()
@@ -96,19 +101,30 @@ def _load_data_uri(path: Path) -> str:
     return f"data:image/jpeg;base64,{encoded}"
 
 
+def _run_vision(content: list[dict]) -> _VisionOutput:
+    """The one live call. Seam for tests to stub."""
+    from langchain_core.messages import HumanMessage
+
+    return as_structured(get_vision_model(), _VisionOutput).invoke([HumanMessage(content=content)])
+
+
 def extract_food_from_image(image_path: str, caption: str | None = None) -> VisionResult:
     """Extract food items from a photo. Never raises - problems come back in
     `VisionResult.error`."""
     path = Path(image_path).expanduser()
     if not path.is_file():
-        return VisionResult(is_food=False, error=f"no file at {image_path}")
+        return VisionResult(is_food=False, error="no image file at that path")
     if path.suffix.lower() not in _ALLOWED_SUFFIXES:
-        return VisionResult(is_food=False, error=f"{path.suffix} is not a supported image type")
+        return VisionResult(is_food=False, error=f"{path.suffix or 'that'} is not a supported image type")
+
+    size = path.stat().st_size
+    if size > _MAX_BYTES:
+        return VisionResult(is_food=False, error=f"image is too large ({size // 1_000_000} MB, limit {_MAX_BYTES // 1_000_000} MB)")
 
     try:
         data_uri = _load_data_uri(path)
-    except Exception as exc:
-        return VisionResult(is_food=False, error=f"could not read the image: {exc}")
+    except Exception:
+        return VisionResult(is_food=False, error="could not read that image")
 
     prompt = _PROMPT
     if caption:
@@ -120,13 +136,9 @@ def extract_food_from_image(image_path: str, caption: str | None = None) -> Visi
     ]
 
     try:
-        from langchain_core.messages import HumanMessage
-
-        result: _VisionOutput = as_structured(get_vision_model(), _VisionOutput).invoke(
-            [HumanMessage(content=content)]
-        )
-    except Exception as exc:
-        return VisionResult(is_food=False, error=f"the vision model failed: {exc}")
+        result = _run_vision(content)
+    except Exception:
+        return VisionResult(is_food=False, error="the vision model could not be reached")
 
     return VisionResult(
         is_food=result.is_food,

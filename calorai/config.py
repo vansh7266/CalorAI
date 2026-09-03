@@ -127,9 +127,26 @@ class ModelSpec:
     auth_header: str | None = None
     extra_headers: dict[str, str] = field(default_factory=dict)
 
-    def redacted(self) -> str:
-        tail = self.api_key[-4:] if len(self.api_key) >= 4 else "----"
-        return f"{self.role} = {self.provider}/{self.model} (key ...{tail})"
+    @property
+    def api_key_env(self) -> str:
+        return PROVIDERS[self.provider]["api_key_env"]
+
+    def require_usable(self) -> None:
+        """Raise if this spec can't actually reach a model. Called at build time."""
+        if not self.model:
+            raise ConfigError(
+                f"No model set for the {self.role} path. Set {self.role.upper()}_MODEL in your "
+                f".env (the '{self.provider}' provider has no built-in default)."
+            )
+        if not self.api_key:
+            raise ConfigError(
+                f"Missing {self.api_key_env} for the '{self.provider}' provider "
+                f"(needed for the {self.role} model). Add it to your .env file."
+            )
+
+    def describe(self) -> str:
+        state = "ok" if (self.model and self.api_key) else "not configured"
+        return f"{self.role} = {self.provider}/{self.model or '?'} [{state}]"
 
 
 def _read(name: str, default: str | None = None) -> str | None:
@@ -140,33 +157,25 @@ def _read(name: str, default: str | None = None) -> str | None:
 
 
 def _make_spec(role: str, provider: str, model: str | None) -> ModelSpec:
+    """Assemble a ModelSpec. A missing model name or API key is NOT fatal here -
+    the spec carries an empty value and the error is raised at model-build time
+    (`models.gateway.build_chat_model`). This keeps `get_settings()` usable in
+    tests and tooling that never actually call a model."""
     if provider not in PROVIDERS:
         valid = ", ".join(sorted(PROVIDERS))
         raise ConfigError(f"Unknown provider '{provider}' for the {role} model. Use one of: {valid}.")
 
-    if not model:
-        raise ConfigError(
-            f"No model set for the {role} path. "
-            f"Set {role.upper()}_MODEL in your .env "
-            f"(the '{provider}' provider has no built-in default - check its docs for the current name)."
-        )
-
     provider_info = PROVIDERS[provider]
-    api_key = _read(provider_info["api_key_env"])
-    if not api_key:
-        raise ConfigError(
-            f"Missing {provider_info['api_key_env']} for the '{provider}' provider "
-            f"(needed for the {role} model). Add it to your .env file."
-        )
+    api_key = _read(provider_info["api_key_env"]) or ""
 
     headers: dict[str, str] = {}
-    if provider_info["auth"] == "header" and provider_info["auth_header"]:
+    if provider_info["auth"] == "header" and provider_info["auth_header"] and api_key:
         headers[provider_info["auth_header"]] = api_key
 
     return ModelSpec(
         role=role,
         provider=provider,
-        model=model,
+        model=model or "",
         api_key=api_key,
         kind=provider_info["kind"],
         base_url=provider_info["base_url"],
@@ -207,9 +216,9 @@ class Settings:
     def summary(self) -> str:
         lines = [
             f"profile: {self.profile}",
-            f"  {self.text_model.redacted()}",
-            f"  {self.vision_model.redacted()}",
-            f"  {self.worker_model.redacted()}",
+            f"  {self.text_model.describe()}",
+            f"  {self.vision_model.describe()}",
+            f"  {self.worker_model.describe()}",
             f"agent max loops: {self.agent_max_loops}",
             f"request timeout: {self.request_timeout_seconds}s",
             f"langsmith tracing: {self.langsmith_tracing}",

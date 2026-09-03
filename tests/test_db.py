@@ -166,12 +166,14 @@ def test_add_and_remove_item():
     assert repo.daily_totals(user.id, "2026-09-03").rounded().kcal == 200
 
 
-def test_nutrition_cache_roundtrip():
-    assert repo.get_cached_nutrition("paneer paratha") is None
+def test_nutrition_cache_roundtrip_keyed_by_name_and_unit():
+    assert repo.get_cached_nutrition("paneer paratha", "piece") is None
     repo.put_cached_nutrition(
         "Paneer Paratha",
         {"kcal_per_unit": 280, "protein_g_per_unit": 9, "carbs_g_per_unit": 30, "fat_g_per_unit": 14, "unit": "piece"},
         source="model",
     )
-    cached = repo.get_cached_nutrition("paneer paratha")
+    cached = repo.get_cached_nutrition("paneer paratha", "piece")
     assert cached is not None and cached["kcal_per_unit"] == 280 and cached["source"] == "model"
+    # a different unit is a separate cache entry
+    assert repo.get_cached_nutrition("paneer paratha", "plate") is None

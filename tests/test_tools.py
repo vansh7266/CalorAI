@@ -62,7 +62,7 @@ def test_correction_updates_not_doubles():
 
     upd = update_meal.invoke({"meal_id": meal_id, "item_name": "roti", "new_quantity": 3})
     assert upd["updated"] is True
-    assert "roti quantity -> 3.0" in upd["changes"]
+    assert "roti -> 3.0" in upd["changes"]
     assert len(upd["items"]) == 1          # still one row
     assert upd["today"]["kcal"] == 315     # 3 * 105, not 525
 

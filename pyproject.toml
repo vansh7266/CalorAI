@@ -5,12 +5,39 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "calorai-logging-agent"
 version = "0.1.0"
-description = "Conversational meal-logging agent for CalorAI — text + photo, memory, running totals."
+description = "Conversational meal-logging agent for CalorAI - text + photo, memory, running totals."
 requires-python = ">=3.10"
 readme = "README.md"
+dependencies = [
+    "langgraph>=1.2,<2",
+    "langchain-core>=1.6,<2",
+    "langgraph-checkpoint-sqlite>=3.1,<4",
+    "langgraph-prebuilt>=1.1,<2",
+    "langchain-openai>=1.6,<2",
+    "langsmith>=0.12,<1",
+    "pydantic>=2.10,<3",
+    "python-dotenv>=1.0,<2",
+    "rich>=13.9",
+    "PyYAML>=6.0",
+    "pillow>=11.0",
+    "tzdata>=2025.1",
+    "tzlocal>=5.2",
+]
+
+[project.optional-dependencies]
+anthropic = ["langchain-anthropic>=1.7,<2"]
+google = ["langchain-google-genai>=4.4,<5"]
+graph = ["grandalf>=0.8"]
+dev = ["pytest>=8.3"]
+
+[project.scripts]
+calorai = "calorai.cli.app:main"
 
 [tool.setuptools.packages.find]
 include = ["calorai*"]
+
+[tool.setuptools.package-data]
+"calorai.db" = ["*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

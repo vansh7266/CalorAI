@@ -46,23 +46,50 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _agent_reply(console: Console, user: User, text: str, image_path: str | None, stream: bool) -> None:
-    from calorai.agent.runner import run_turn, stream_turn
+def _parse_img_command(line: str) -> tuple[str | None, str]:
+    """`/img <path> [caption]`. Handles quoted paths and unquoted paths with
+    spaces: try progressively shorter prefixes of the remainder until one is a
+    real file; the rest is the caption."""
+    import shlex
+
+    rest = line.split(maxsplit=1)[1].strip() if len(line.split(maxsplit=1)) > 1 else ""
+    if not rest:
+        return None, ""
+
+    if rest[0] in "'\"":
+        try:
+            parts = shlex.split(rest)
+        except ValueError:
+            parts = [rest]
+        path = os.path.expanduser(parts[0])
+        caption = " ".join(parts[1:])
+        return (path, caption) if os.path.isfile(path) else (None, "")
+
+    words = rest.split(" ")
+    for cut in range(len(words), 0, -1):
+        candidate = os.path.expanduser(" ".join(words[:cut]))
+        if os.path.isfile(candidate):
+            return candidate, " ".join(words[cut:])
+    return None, ""
+
+
+def _agent_reply(console: Console, user: User, text: str, image_path: str | None, stream: bool) -> bool:
+    """Run a turn and print the reply. Returns False if the agent reported failure."""
+    from calorai.agent.runner import GENERIC_ERROR, run_turn, stream_turn
 
     console.print()
     try:
         if not stream:
             with console.status("[dim]thinking…[/dim]", spinner="dots"):
-                reply = run_turn(text, user_id=user.id, thread_id=user.id,
-                                 timezone_name=user.timezone, image_path=image_path)
-            console.print(f"[bold green]CalorAI[/bold green]  {reply}")
-            return
+                reply = run_turn(text, user_id=user.id, timezone_name=user.timezone, image_path=image_path)
+            console.print("[bold green]CalorAI[/bold green]  ", end="")
+            console.print(reply, markup=False)
+            return reply != GENERIC_ERROR
 
         # Hold the spinner until the first chunk arrives, THEN print the label +
         # stream. (Printing the label before console.status lets the spinner's
         # live display swallow it.)
-        chunks = stream_turn(text, user_id=user.id, thread_id=user.id,
-                             timezone_name=user.timezone, image_path=image_path)
+        chunks = stream_turn(text, user_id=user.id, timezone_name=user.timezone, image_path=image_path)
         first = None
         with console.status("[dim]thinking…[/dim]", spinner="dots"):
             for chunk in chunks:
@@ -73,14 +100,17 @@ def _agent_reply(console: Console, user: User, text: str, image_path: str | None
         console.print("[bold green]CalorAI[/bold green]  ", end="")
         if first is None:
             console.print("[dim](no reply)[/dim]")
-            return
-        console.print(first, end="")
+            return True
+        console.print(first, end="", markup=False)
+        collected = first
         for chunk in chunks:
-            console.print(chunk, end="")
+            collected += chunk
+            console.print(chunk, end="", markup=False)
         console.print()
-    except Exception as exc:  # keep the REPL alive on any agent failure
-        console.print(f"\n[red]Something went wrong: {exc}[/red]")
-        console.print("[dim]Your data is safe. Try rephrasing, or /quit.[/dim]")
+        return collected.strip() != GENERIC_ERROR
+    except Exception:
+        console.print("\n[red]Something went wrong. Your data is safe - try rephrasing, or /quit.[/red]")
+        return False
 
 
 def _repl(console: Console, user: User, stream: bool) -> None:
@@ -95,15 +125,10 @@ def _repl(console: Console, user: User, stream: bool) -> None:
         if not line:
             continue
         if line.startswith("/"):
-            parts = line.split(maxsplit=2)
-            if parts[0].lower() in ("/img", "/image", "/photo"):
-                if len(parts) < 2:
-                    console.print("[yellow]usage: /img <path> [caption][/yellow]")
-                    continue
-                path = os.path.expanduser(parts[1])
-                caption = parts[2] if len(parts) > 2 else ""
-                if not os.path.isfile(path):
-                    console.print(f"[yellow]no file at {path}[/yellow]")
+            if line[1:].split(maxsplit=1)[0].lower() in ("img", "image", "photo"):
+                path, caption = _parse_img_command(line)
+                if path is None:
+                    console.print("[yellow]usage: /img <path> [caption]  (quote paths with spaces)[/yellow]")
                     continue
                 _agent_reply(console, user, caption, path, stream)
                 console.print()
@@ -132,9 +157,9 @@ def main(argv: list[str] | None = None) -> int:
             console.print(f"[red]no file at {args.image}[/red]")
             return 1
         image = os.path.expanduser(args.image) if args.image else None
-        _agent_reply(console, user, args.message or "", image, stream=not args.no_stream)
+        ok = _agent_reply(console, user, args.message or "", image, stream=not args.no_stream)
         console.print()
-        return 0
+        return 0 if ok else 1
 
     _repl(console, user, stream=not args.no_stream)
     return 0

@@ -49,7 +49,8 @@ def _ingest(state: AgentState) -> dict:
         input_type = "image"
     else:
         input_type = "text"
-    return {"input_type": input_type, "awaiting_user": False}
+    # Always clear the previous turn's vision result; the image branch re-populates it.
+    return {"input_type": input_type, "awaiting_user": False, "vision_result": None}
 
 
 def _load_context(state: AgentState) -> dict:
@@ -105,6 +106,30 @@ def _after_ingest(state: AgentState) -> list[str]:
     return ["load_context"]
 
 
+_HISTORY_TURNS = 8  # user turns kept in the prompt; older context lives in memory + DB
+
+
+def _tool_rounds_this_turn(messages: list) -> int:
+    """Tool results since the last user message - i.e. the agent<->tools loop count
+    for the CURRENT turn only. Counting the whole checkpointed history would
+    permanently unbind tools after a few turns."""
+    last_human = -1
+    for i, m in enumerate(messages):
+        if m.type == "human":
+            last_human = i
+    return sum(1 for m in messages[last_human + 1:] if m.type == "tool")
+
+
+def _recent_window(messages: list) -> list:
+    """Keep the last few user turns (and everything after each), so the prompt
+    doesn't grow without bound. Slices only at user-message boundaries, so
+    tool-call / tool-result pairs are never split."""
+    human_idxs = [i for i, m in enumerate(messages) if m.type == "human"]
+    if len(human_idxs) <= _HISTORY_TURNS:
+        return messages
+    return messages[human_idxs[-_HISTORY_TURNS]:]
+
+
 def _agent(state: AgentState) -> dict:
     system = build_system_prompt(
         memory_card=state.get("memory_card", ""),
@@ -114,14 +139,13 @@ def _agent(state: AgentState) -> dict:
     )
 
     model = get_text_model(streaming=True)
-    tool_rounds = sum(1 for m in state["messages"] if m.type == "tool")
-    if tool_rounds < get_settings().agent_max_loops:
+    if _tool_rounds_this_turn(state["messages"]) < get_settings().agent_max_loops:
         model = model.bind_tools(AGENT_TOOLS)
     else:
-        # Loop cap reached: force a plain-text answer instead of another tool call.
-        system += "\n\n(You have already used several tools this turn. Reply to the user now in plain text.)"
+        # Loop cap for THIS turn reached: force a plain-text answer.
+        system += "\n\n(You have already used several tools on this message. Reply to the user now in plain text.)"
 
-    messages = [SystemMessage(content=system), *state["messages"]]
+    messages = [SystemMessage(content=system), *_recent_window(state["messages"])]
     try:
         response = model.invoke(messages)
     except Exception:

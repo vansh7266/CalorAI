@@ -38,7 +38,7 @@ def test_resolve_seed_hit_is_cached():
     assert est.source == "seed"
     assert est.kcal_per_unit == 105
 
-    cached = repo.get_cached_nutrition("roti")
+    cached = repo.get_cached_nutrition("roti", "piece")
     assert cached is not None and cached["source"] == "seed"
 
 
@@ -64,7 +64,7 @@ def test_resolve_model_path_is_cached(monkeypatch):
     est = resolver.resolve("dragon fruit smoothie", "glass")
     assert est.source == "model" and est.kcal_per_unit == 350
 
-    cached = repo.get_cached_nutrition("dragon fruit smoothie")
+    cached = repo.get_cached_nutrition("dragon fruit smoothie", "glass")
     assert cached is not None and cached["source"] == "model" and cached["kcal_per_unit"] == 350
 
 

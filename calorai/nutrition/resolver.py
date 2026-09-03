@@ -95,23 +95,33 @@ def _model_estimate(name: str, unit_hint: str | None) -> NutritionEstimate | Non
     )
 
 
+def _normalize_unit(unit: str | None) -> str:
+    return (unit or "serving").strip().lower()
+
+
 def resolve(name: str, unit_hint: str | None = None) -> NutritionEstimate:
     """Resolve one food's per-unit macros. Never raises - on total failure it
     returns a zeroed estimate with source 'failed' so the meal can still be
-    logged and the gap surfaced to the user."""
-    key = normalize_name(name)
+    logged and the gap surfaced to the user.
 
-    cached = repo.get_cached_nutrition(key)
-    if cached:
-        source = "seed" if cached["source"] == "seed" else "cache"
-        return _from_macros(key, cached, source, 1.0 if source == "seed" else 0.7)
+    Seed foods win on a name match and return the seed's canonical unit (the
+    numbers are known-good and stable, which matters more here than a perfect
+    unit). Model estimates are cached per (name, unit) so a per-cup estimate is
+    never silently reused for a per-plate request.
+    """
+    key = normalize_name(name)
+    unit = _normalize_unit(unit_hint)
 
     seeded = seed.lookup(key)
     if seeded:
         repo.put_cached_nutrition(key, seeded, source="seed")
         return _from_macros(key, seeded, "seed", 1.0)
 
-    estimate = _model_estimate(name, unit_hint)
+    cached = repo.get_cached_nutrition(key, unit)
+    if cached:
+        return _from_macros(key, cached, "cache", 0.7)
+
+    estimate = _model_estimate(name, unit if unit != "serving" else None)
     if estimate is not None:
         repo.put_cached_nutrition(
             key,
@@ -128,7 +138,7 @@ def resolve(name: str, unit_hint: str | None = None) -> NutritionEstimate:
 
     return NutritionEstimate(
         name=key,
-        unit=unit_hint or "serving",
+        unit=unit,
         kcal_per_unit=0.0,
         protein_g_per_unit=0.0,
         carbs_g_per_unit=0.0,

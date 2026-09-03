@@ -197,6 +197,24 @@
     meals_today: 0
     reply_contains_any: ["cal", "kcal", "calorie"]
 
+# --- sustained conversation (guards the per-turn tool-budget regression) -------
+
+- id: long_session_tools_stay_available
+  category: sustained
+  setup:
+    - "had 2 rotis for lunch"
+    - "add a bowl of dal"
+    - "and some rice"
+    - "actually make the rotis 3"
+    - "add a glass of chaas"
+    - "and a small salad"
+  message: "add a bowl of curd too"
+  expect:
+    meals_today: 1
+    has_items: ["roti", "dal", "curd"]
+    item_quantity: {roti: 3}
+
+
 # --- multimodal ---------------------------------------------------------------
 
 - id: multimodal_plain_photo
@@ -206,6 +224,9 @@
   caption: ""
   expect:
     meals_today: 1
+    min_items: 1               # the vision model actually detected something
+    meal_source: image
+    total_kcal_between: [150, 2500]
 
 - id: multimodal_caption_half
   category: multimodal
@@ -213,4 +234,7 @@
   image: "samples/pork_plate.jpg"
   caption: "half of this was my brother's"
   expect:
-    meals_today: 1
+    meals_today: 1             # ONE meal, not two
+    min_items: 1
+    meal_source: "image+text"
+    caption_reduced_portions: true   # something on the plate was logged at < 1 unit

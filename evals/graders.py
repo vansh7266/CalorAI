@@ -91,6 +91,24 @@ def grade(expect: dict, user: User, reply: str) -> GradeResult:
             hit = any(m.meal_type == mtype for m in todays_meals)
             result.add(f"a meal is {mtype}", hit, f"types={[m.meal_type for m in todays_meals]}")
 
+    if "min_items" in expect:
+        result.add(f">= {expect['min_items']} item(s) logged today", len(todays_items) >= expect["min_items"],
+                   f"got {len(todays_items)}")
+
+    if "meal_source" in expect:
+        want = expect["meal_source"]
+        hit = any(m.source == want for m in todays_meals)
+        result.add(f"a meal has source '{want}'", hit, f"sources={[m.source for m in todays_meals]}")
+
+    if expect.get("caption_reduced_portions"):
+        reduced = any(i.quantity < 1.0 for i in todays_items)
+        result.add("a portion was reduced by the caption (< 1 unit)", reduced,
+                   f"quantities={[i.quantity for i in todays_items]}")
+
+    if "exact_kcal" in expect:
+        kcal = repo.daily_totals(user.id, day).kcal
+        result.add(f"total kcal == {expect['exact_kcal']}", abs(kcal - expect["exact_kcal"]) < 1.0, f"got {round(kcal)}")
+
     if "memory_has" in expect:
         spec = expect["memory_has"]
         rows = repo.get_active_memory(user.id, types=[spec["type"]] if "type" in spec else None)

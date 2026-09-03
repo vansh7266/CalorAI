@@ -24,6 +24,7 @@ class TurnContext:
     turn_id: str
     timezone_name: str
     now_utc: datetime
+    source: str = "text"  # "text" | "image" | "image+text" - how this turn arrived
 
     def _tz(self) -> timezone | ZoneInfo:
         try:
@@ -52,7 +53,11 @@ class TurnContext:
         if ref in ("day before yesterday", "2 days ago"):
             return (self.local_now.date() - timedelta(days=2)).isoformat()
         if _ISO_DATE.match(ref):
-            return ref
+            try:
+                date.fromisoformat(ref)  # reject impossible dates like 2026-99-99
+                return ref
+            except ValueError:
+                return self.local_date
         weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
         if ref in weekdays:
             today = self.local_now.date()

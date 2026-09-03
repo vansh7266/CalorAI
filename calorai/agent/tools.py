@@ -8,21 +8,46 @@ the user.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
+import math
+from datetime import timezone
 
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from calorai.agent.context import get_context
 from calorai.db import repositories as repo
 from calorai.db.records import Meal, MealItem
 from calorai.nutrition.resolver import normalize_name, resolve, resolve_many
 
+logger = logging.getLogger("calorai.tools")
+
+MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack")
+
+
+def _positive_finite(value: float) -> float:
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("quantity must be a positive number")
+    return float(value)
+
 
 class FoodItem(BaseModel):
     name: str = Field(description="the food, singular and specific: 'aloo paratha', not 'parathas'")
-    quantity: float = Field(default=1.0, description="how many units")
+    quantity: float = Field(default=1.0, gt=0, description="how many units (> 0)")
     unit: str = Field(default="serving", description="unit for quantity: piece, cup, bowl, glass, slice, plate...")
+
+    @field_validator("quantity")
+    @classmethod
+    def _q(cls, v: float) -> float:
+        return _positive_finite(v)
+
+    @field_validator("name", "unit")
+    @classmethod
+    def _nonblank(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("must not be blank")
+        return v
 
 
 # --- shared helpers ---
@@ -76,9 +101,9 @@ def _resolved_rows(items: list[FoodItem]) -> tuple[list[dict], list[str]]:
         rows.append(
             {
                 "name": normalize_name(it.name),
-                "quantity": float(it.quantity),
-                "unit": it.unit or est.unit,
-                "confidence": est.confidence,
+                "quantity": _positive_finite(it.quantity),
+                "unit": est.unit,  # the unit the resolved macros are actually for
+                "confidence": max(0.0, min(1.0, est.confidence)),
                 **est.as_item_fields(),
             }
         )
@@ -89,7 +114,16 @@ def _eaten_at_for(meal_date: str) -> str:
     ctx = get_context()
     if meal_date == ctx.local_date:
         return ctx.now_utc.isoformat(timespec="seconds")
-    return f"{meal_date}T12:00:00+00:00"
+    # A past day: use local noon on that date, converted to UTC.
+    from datetime import datetime as _dt
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        tz = ZoneInfo(ctx.timezone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = timezone.utc
+    local_noon = _dt.fromisoformat(f"{meal_date}T12:00:00").replace(tzinfo=tz)
+    return local_noon.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 def _match_item(meal: Meal, name: str) -> MealItem | str | None:
@@ -116,6 +150,18 @@ def _owned_meal(meal_id: str) -> Meal | None:
     return meal
 
 
+def _valid_meal_type(value: str | None) -> str | None:
+    """Normalize to one of the known meal types, or None (caller infers/asks)."""
+    if not value:
+        return None
+    v = value.strip().lower()
+    aliases = {"brunch": "breakfast", "supper": "dinner", "tea": "snack", "dessert": "snack"}
+    v = aliases.get(v, v)
+    return v if v in MEAL_TYPES else None
+
+
+
+
 # --- write tools ---
 
 
@@ -140,23 +186,26 @@ def log_meal(
             return {"error": "no items to log"}
         ctx = get_context()
         meal_date = ctx.resolve_date(eaten_when)
-        mtype = meal_type or ctx.meal_type_for_now()
+        mtype = _valid_meal_type(meal_type) or ctx.meal_type_for_now()
         rows, unresolved = _resolved_rows(items)
         meal = repo.insert_meal(
             user_id=ctx.user_id,
             eaten_at=_eaten_at_for(meal_date),
             meal_date=meal_date,
             meal_type=mtype,
-            description=note or _describe(items),
-            source="text",
+            description=(note or _describe(items))[:500],
+            source=ctx.source,  # trusted per-turn input type, not a model argument
             items=rows,
         )
         result = {"logged": True, **_meal_view(meal), "today": _totals(ctx.user_id, ctx.local_date)}
         if unresolved:
             result["could_not_estimate_calories_for"] = unresolved
         return result
-    except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"could not log the meal: {exc}"}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except Exception:
+        logger.exception("log_meal failed")
+        return {"error": "could not log that meal"}
 
 
 @tool
@@ -182,63 +231,77 @@ def update_meal(
         ctx = get_context()
         meal = _owned_meal(meal_id)
         if meal is None:
-            return {"error": f"no meal found with id {meal_id}"}
+            return {"error": "no meal with that id"}
 
+        # 1. validate every requested change first - nothing is written yet
+        ops: list[dict] = []
         changed: list[str] = []
 
-        if item_name is not None and new_quantity is not None:
+        if new_quantity is not None:
+            if item_name is None:
+                return {"error": "which item's quantity? pass item_name"}
+            try:
+                qty = _positive_finite(new_quantity)
+            except ValueError as exc:
+                return {"error": str(exc)}
             match = _match_item(meal, item_name)
             if match is None:
                 return {"error": f"'{item_name}' is not in that meal", "items": [i.name for i in meal.items]}
             if match == "AMBIGUOUS":
                 return {"error": f"more than one item matches '{item_name}'", "items": [i.name for i in meal.items]}
-            repo.set_item_quantity(match.id, new_quantity, turn_id=ctx.turn_id)
-            changed.append(f"{match.name} quantity -> {new_quantity}")
+            ops.append({"op": "set_quantity", "item_id": match.id, "quantity": qty})
+            changed.append(f"{match.name} -> {qty}")
 
         if remove_item is not None:
             match = _match_item(meal, remove_item)
             if match is None or match == "AMBIGUOUS":
-                return {"error": f"could not uniquely match '{remove_item}' to remove",
-                        "items": [i.name for i in meal.items]}
-            repo.remove_item(match.id, turn_id=ctx.turn_id)
+                return {"error": f"could not uniquely match '{remove_item}'", "items": [i.name for i in meal.items]}
+            ops.append({"op": "remove_item", "item_id": match.id})
             changed.append(f"removed {match.name}")
 
         if add_item is not None:
             est = resolve(add_item.name, add_item.unit)
-            repo.add_item_to_meal(
-                meal_id,
-                {
-                    "name": normalize_name(add_item.name),
-                    "quantity": float(add_item.quantity),
-                    "unit": add_item.unit or est.unit,
-                    "confidence": est.confidence,
-                    **est.as_item_fields(),
-                },
-                turn_id=ctx.turn_id,
-            )
+            ops.append({"op": "add_item", "item": {
+                "name": normalize_name(add_item.name),
+                "quantity": _positive_finite(add_item.quantity),
+                "unit": est.unit,
+                "confidence": max(0.0, min(1.0, est.confidence)),
+                **est.as_item_fields(),
+            }})
             changed.append(f"added {add_item.name}")
 
         if meal_type is not None:
-            repo.update_meal_field(meal_id, "meal_type", meal_type, turn_id=ctx.turn_id)
-            changed.append(f"meal_type -> {meal_type}")
+            mt = _valid_meal_type(meal_type)
+            if mt is None:
+                return {"error": f"meal type must be one of {', '.join(MEAL_TYPES)}"}
+            ops.append({"op": "set_field", "field": "meal_type", "value": mt})
+            changed.append(f"meal_type -> {mt}")
 
         if eaten_when is not None:
             new_date = ctx.resolve_date(eaten_when)
-            repo.update_meal_field(meal_id, "meal_date", new_date, turn_id=ctx.turn_id)
-            repo.update_meal_field(meal_id, "eaten_at", _eaten_at_for(new_date), turn_id=ctx.turn_id)
+            ops.append({"op": "set_field", "field": "meal_date", "value": new_date})
+            ops.append({"op": "set_field", "field": "eaten_at", "value": _eaten_at_for(new_date)})
             changed.append(f"date -> {new_date}")
 
-        if not changed:
+        if not ops:
             return {"error": "no changes were given"}
+
+        # 2. apply them all in one transaction (all-or-nothing)
+        repo.apply_meal_edits(meal_id, ops, turn_id=ctx.turn_id)
 
         updated = repo.get_meal(meal_id)
         out = {"updated": True, "changes": changed, **_meal_view(updated),
                "today": _totals(ctx.user_id, ctx.local_date)}
-        if updated.meal_date != ctx.local_date:
+        if updated.status == "deleted":
+            out["note"] = "that removed the last item, so the meal is gone"
+        elif updated.meal_date != ctx.local_date:
             out["that_day"] = _totals(ctx.user_id, updated.meal_date)
         return out
-    except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"could not update the meal: {exc}"}
+    except ValueError as exc:
+        return {"error": str(exc)}
+    except Exception:
+        logger.exception("update_meal failed")
+        return {"error": "could not update that meal"}
 
 
 @tool
@@ -257,8 +320,9 @@ def delete_meal(meal_id: str) -> dict:
             "note": "was already deleted" if not ok else "removed",
             "today": _totals(ctx.user_id, ctx.local_date),
         }
-    except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"could not delete the meal: {exc}"}
+    except Exception:
+        logger.exception("delete_meal failed")
+        return {"error": "could not delete that meal"}
 
 
 # --- read tools ---
@@ -280,8 +344,8 @@ def get_daily_totals(date: str | None = None) -> dict:
                 for m in meals
             ],
         }
-    except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"could not read totals: {exc}"}
+    except Exception:  # pragma: no cover - defensive
+        return {"error": "could not read your totals right now"}
 
 
 @tool
@@ -301,8 +365,8 @@ def get_meals(date: str | None = None) -> dict:
         else:
             meals = repo.get_recent_meals(ctx.user_id, limit=10)
         return {"count": len(meals), "meals": [_meal_view(m) for m in meals]}
-    except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"could not read meals: {exc}"}
+    except Exception:  # pragma: no cover - defensive
+        return {"error": "could not read your meals right now"}
 
 
 @tool
@@ -333,8 +397,8 @@ def lookup_nutrition(items: list[FoodItem]) -> dict:
                 for it, est in zip(items, estimates)
             ]
         }
-    except Exception as exc:  # pragma: no cover - defensive
-        return {"error": f"could not look up nutrition: {exc}"}
+    except Exception:  # pragma: no cover - defensive
+        return {"error": "could not look up that nutrition info right now"}
 
 
 LOGGING_TOOLS = [log_meal, update_meal, delete_meal, get_daily_totals, get_meals, lookup_nutrition]

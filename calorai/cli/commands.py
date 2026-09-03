@@ -11,6 +11,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from calorai.agent.context import TurnContext
@@ -49,7 +50,7 @@ def cmd_quit(console: Console, user: User, arg: str) -> bool:
 
 
 def cmd_whoami(console: Console, user: User, arg: str) -> bool:
-    console.print(f"[bold]{user.name}[/bold] - id [cyan]{user.id}[/cyan] - timezone {user.timezone}")
+    console.print(f"[bold]{escape(user.name)}[/bold] - id [cyan]{user.id}[/cyan] - timezone {escape(user.timezone)}")
     return True
 
 
@@ -87,7 +88,7 @@ def cmd_history(console: Console, user: User, arg: str) -> bool:
         items = ", ".join(
             f"{int(i.quantity) if float(i.quantity).is_integer() else i.quantity} {i.name}" for i in m.items
         )
-        table.add_row(m.meal_date, m.meal_type or "-", items or m.description, str(round(m.kcal)))
+        table.add_row(m.meal_date, m.meal_type or "-", escape(items or m.description), str(round(m.kcal)))
     console.print(table)
     return True
 
@@ -103,7 +104,7 @@ def cmd_memory(console: Console, user: User, arg: str) -> bool:
     table.add_column("about")
     table.add_column("learned")
     for r in rows:
-        table.add_row(r.id, r.type, r.content, r.learned_via)
+        table.add_row(r.id, r.type, escape(r.content), r.learned_via)
     console.print(table)
     return True
 
@@ -115,10 +116,10 @@ def cmd_forget(console: Console, user: User, arg: str) -> bool:
         return True
     row = repo.get_memory(mem_id)
     if not row or row.user_id != user.id:
-        console.print(f"[yellow]no memory with id {mem_id}[/yellow]")
+        console.print("[yellow]no memory with that id (see /memory)[/yellow]")
         return True
     repo.deactivate_memory(mem_id)
-    console.print(f"[green]forgotten:[/green] {row.content}")
+    console.print(f"[green]forgotten:[/green] {escape(row.content)}")
     return True
 
 

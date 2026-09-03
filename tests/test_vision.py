@@ -19,11 +19,7 @@ def photo(tmp_path):
 
 
 def _stub(model_output: _VisionOutput):
-    class _S:
-        def invoke(self, _messages):
-            return model_output
-
-    return lambda *a, **k: _S()
+    return lambda _content: model_output
 
 
 def test_missing_file_and_bad_type():
@@ -34,7 +30,7 @@ def test_missing_file_and_bad_type():
 def test_extract_parses_items(monkeypatch, photo):
     monkeypatch.setattr(
         vx,
-        "as_structured",
+        "_run_vision",
         _stub(
             _VisionOutput(
                 is_food=True,
@@ -53,22 +49,18 @@ def test_extract_parses_items(monkeypatch, photo):
 
 
 def test_extract_not_food(monkeypatch, photo):
-    monkeypatch.setattr(vx, "as_structured", _stub(_VisionOutput(is_food=False, note="looks like a car")))
+    monkeypatch.setattr(vx, "_run_vision", _stub(_VisionOutput(is_food=False, note="looks like a car")))
     result = extract_food_from_image(photo)
     assert result.ok and not result.is_food
 
 
 def test_extract_model_failure(monkeypatch, photo):
-    def _boom(*a, **k):
-        class _S:
-            def invoke(self, _m):
-                raise RuntimeError("api down")
+    def _boom(_content):
+        raise RuntimeError("api down")
 
-        return _S()
-
-    monkeypatch.setattr(vx, "as_structured", _boom)
+    monkeypatch.setattr(vx, "_run_vision", _boom)
     result = extract_food_from_image(photo)
-    assert not result.ok and "vision model failed" in result.error
+    assert not result.ok and result.error and "api down" not in result.error  # no raw exception leak
 
 
 def test_prompt_renders_vision_block():

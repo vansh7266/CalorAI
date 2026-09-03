@@ -106,9 +106,10 @@ def test_reflection_saves_new_fact(monkeypatch):
         def invoke(self, _prompt):
             return memory._Reflection(should_save=True, kind="diet", content="vegetarian")
 
-    monkeypatch.setattr(memory, "as_structured", lambda *a, **k: _Stub())
+    monkeypatch.setattr(memory, "_run_reflection_model", lambda _p: _Stub().invoke(_p))
     rec = run_reflection(user, "turn_x", "i'm vegetarian btw", "Got it, noted!")
     assert rec is not None and rec.content == "vegetarian"
+    assert rec.learned_via == "inferred"  # reflection output is a model inference, not "stated"
     assert any(r.content == "vegetarian" for r in repo.get_active_memory(user, types=["diet"]))
 
 
@@ -119,6 +120,6 @@ def test_reflection_skips_when_nothing_durable(monkeypatch):
         def invoke(self, _prompt):
             return memory._Reflection(should_save=False)
 
-    monkeypatch.setattr(memory, "as_structured", lambda *a, **k: _Stub())
+    monkeypatch.setattr(memory, "_run_reflection_model", lambda _p: _Stub().invoke(_p))
     assert run_reflection(user, "turn_y", "had some cake", "Logged ~350 cal of cake.") is None
     assert repo.get_active_memory(user) == []
