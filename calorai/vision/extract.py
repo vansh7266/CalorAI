@@ -80,7 +80,15 @@ def _load_data_uri(path: Path) -> str:
     from PIL import Image
 
     image = Image.open(path)
-    image = image.convert("RGB")
+    if image.mode in ("P", "RGBA", "LA"):
+        # flatten any transparency onto white so it doesn't become black in JPEG
+        rgba = image.convert("RGBA")
+        canvas = Image.new("RGB", rgba.size, (255, 255, 255))
+        canvas.paste(rgba, mask=rgba.split()[-1])
+        image = canvas
+    else:
+        image = image.convert("RGB")
+
     image.thumbnail((_MAX_EDGE, _MAX_EDGE))
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=85)
