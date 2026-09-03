@@ -22,6 +22,7 @@ evals/results/
 benchmarks/results/
 evals/*.db
 benchmarks/*.db
+benchmarks/last_run.txt
 
 # OS / editor
 .DS_Store
