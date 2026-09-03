@@ -1,12 +1,15 @@
-"""The LangGraph agent.
+r"""The LangGraph agent.
 
-    ingest -> load_context -> agent <-> tools -> (end)
+    ingest -> load_context ---> agent <-> tools -> (end)
+           \-> vision_extract -/
 
-* ingest        - classify the input, put the user text on the state
-* load_context  - pull today's totals, the most recent meal, and the memory
-                  profile card into the state (vision result is added in phase 3)
-* agent         - the text model with tools bound; decides to call a tool or reply
-* tools         - run the tool calls, loop back to agent (capped by AGENT_MAX_LOOPS)
+* ingest         - classify text / image / image+text
+* load_context   - today's totals, the most recent meal, the memory profile card
+* vision_extract - (only when there's a photo) a separate vision model pulls out
+                   food items + a confidence per item; runs in parallel with
+                   load_context
+* agent          - the text model with tools bound; decides to call a tool or reply
+* tools          - run the tool calls, loop back to agent (capped by AGENT_MAX_LOOPS)
 
 State is persisted per thread by a SQLite checkpointer, so a conversation
 survives a restart and each user's thread is isolated.
@@ -30,6 +33,7 @@ from calorai.agent.tools import LOGGING_TOOLS
 from calorai.config import DB_PATH, ensure_data_dir, get_settings
 from calorai.db import repositories as repo
 from calorai.models.gateway import get_text_model
+from calorai.vision.extract import extract_food_from_image
 
 AGENT_TOOLS = LOGGING_TOOLS + MEMORY_TOOLS
 
@@ -71,11 +75,26 @@ def _load_context(state: AgentState) -> dict:
     return {"today_totals": today, "last_meal": last_meal, "memory_card": render_profile_card(ctx.user_id)}
 
 
+def _vision_extract(state: AgentState) -> dict:
+    image_path = state.get("image_path")
+    if not image_path:
+        return {}
+    result = extract_food_from_image(image_path, caption=state.get("user_text") or None)
+    return {"vision_result": result.to_context()}
+
+
+def _after_ingest(state: AgentState) -> list[str]:
+    if state.get("input_type") in ("image", "image+text"):
+        return ["load_context", "vision_extract"]
+    return ["load_context"]
+
+
 def _agent(state: AgentState) -> dict:
     system = build_system_prompt(
         memory_card=state.get("memory_card", ""),
         today_totals=state.get("today_totals"),
         last_meal=state.get("last_meal"),
+        vision_result=state.get("vision_result"),
     )
 
     model = get_text_model(streaming=True)
@@ -110,12 +129,14 @@ def build_app():
 
     graph.add_node("ingest", _ingest)
     graph.add_node("load_context", _load_context)
+    graph.add_node("vision_extract", _vision_extract)
     graph.add_node("agent", _agent)
     graph.add_node("tools", ToolNode(AGENT_TOOLS))
 
     graph.add_edge(START, "ingest")
-    graph.add_edge("ingest", "load_context")
+    graph.add_conditional_edges("ingest", _after_ingest, ["load_context", "vision_extract"])
     graph.add_edge("load_context", "agent")
+    graph.add_edge("vision_extract", "agent")
     graph.add_conditional_edges("agent", _route_after_agent, {"tools": "tools", END: END})
     graph.add_edge("tools", "agent")
 

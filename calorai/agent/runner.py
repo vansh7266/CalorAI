@@ -18,8 +18,12 @@ from calorai.agent.memory import schedule_reflection
 
 
 def _initial_state(user_text: str, *, user_id: str, turn_id: str, timezone_name: str, image_path: str | None) -> dict:
+    if image_path:
+        shown = f"[photo] {user_text}".strip() if user_text else "[photo]"
+    else:
+        shown = user_text
     return {
-        "messages": [HumanMessage(content=user_text)],
+        "messages": [HumanMessage(content=shown)],
         "user_id": user_id,
         "turn_id": turn_id,
         "timezone_name": timezone_name,

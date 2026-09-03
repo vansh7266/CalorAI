@@ -62,13 +62,48 @@ MEMORY
 - For "same as yesterday": call get_meals with date="yesterday", then call
   log_meal with the same items (and the meal type they asked for).
 
+PHOTOS
+- When the user sends a photo you get a "photo analysis" block below: the items a
+  separate vision model saw, each with a confidence (0-1), plus a note.
+- Confidence >= 0.7: log it normally.
+- Confidence 0.4-0.7: log it but say you're not certain and invite a correction.
+- Confidence < 0.4, or a name like "unknown ...": ask the user about that item,
+  log the confident ones.
+- is_food false: say it doesn't look like food and ask what they had.
+- A photo WITH a caption is still ONE meal. Apply the caption to the vision items
+  (e.g. "half was my brother's" -> halve the portions) and make a single log_meal
+  call. Never log the photo and the caption as two separate meals.
+
 OUTPUT
 - Plain chat text. No markdown tables or bullet lists unless asked.
 - If you couldn't estimate calories for a food, say so plainly.
 """
 
 
-def build_system_prompt(*, memory_card: str = "", today_totals: dict | None = None, last_meal: dict | None = None) -> str:
+def _render_vision(vision_result: dict) -> str:
+    if vision_result.get("error"):
+        return f"Photo analysis: failed ({vision_result['error']}). Ask the user what they ate."
+    if not vision_result.get("is_food"):
+        note = vision_result.get("note") or "does not look like food"
+        return f"Photo analysis: not food ({note})."
+    lines = ["Photo analysis - items the vision model saw:"]
+    for item in vision_result.get("items", []):
+        lines.append(
+            f"  - {item['name']}: ~{item.get('quantity', 1)} {item.get('unit', 'serving')} "
+            f"(confidence {item.get('confidence', 0):.2f})"
+        )
+    if vision_result.get("note"):
+        lines.append(f"  note: {vision_result['note']}")
+    return "\n".join(lines)
+
+
+def build_system_prompt(
+    *,
+    memory_card: str = "",
+    today_totals: dict | None = None,
+    last_meal: dict | None = None,
+    vision_result: dict | None = None,
+) -> str:
     blocks = [_INSTRUCTIONS]
 
     context_lines: list[str] = []
@@ -85,6 +120,8 @@ def build_system_prompt(*, memory_card: str = "", today_totals: dict | None = No
             f"Most recent meal (id {last_meal['meal_id']}): {last_meal.get('description') or items}"
             + (f" [{items}]" if items and last_meal.get("description") else "")
         )
+    if vision_result:
+        context_lines.append(_render_vision(vision_result))
 
     if context_lines:
         blocks.append("--- current context ---\n" + "\n\n".join(context_lines))

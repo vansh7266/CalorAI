@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from rich.console import Console
@@ -69,6 +70,19 @@ def _repl(console: Console, user: User, stream: bool) -> None:
         if not line:
             continue
         if line.startswith("/"):
+            parts = line.split(maxsplit=2)
+            if parts[0].lower() in ("/img", "/image", "/photo"):
+                if len(parts) < 2:
+                    console.print("[yellow]usage: /img <path> [caption][/yellow]")
+                    continue
+                path = os.path.expanduser(parts[1])
+                caption = parts[2] if len(parts) > 2 else ""
+                if not os.path.isfile(path):
+                    console.print(f"[yellow]no file at {path}[/yellow]")
+                    continue
+                _agent_reply(console, user, caption, path, stream)
+                console.print()
+                continue
             if not dispatch(console, user, line):
                 return
             continue

@@ -20,13 +20,14 @@ from calorai.db.records import User
 HELP_TEXT = """\
 Just type what you ate and I'll log it. Commands:
 
-  /totals [date]     calories + macros for today (or a given day)
-  /history [date]    recent meals, or every meal on a day
-  /memory            what I've remembered about you
-  /forget <id>       make me forget one memory
-  /whoami            your CalorAI id
-  /help              this message
-  /quit              exit
+  /img <path> [caption]   log a meal from a photo
+  /totals [date]          calories + macros for today (or a given day)
+  /history [date]         recent meals, or every meal on a day
+  /memory                 what I've remembered about you
+  /forget <id>            make me forget one memory
+  /whoami                 your CalorAI id
+  /help                   this message
+  /quit                   exit
 
 Dates accept 'today', 'yesterday', a weekday, or YYYY-MM-DD.\
 """
