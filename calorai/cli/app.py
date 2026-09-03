@@ -121,13 +121,18 @@ def main(argv: list[str] | None = None) -> int:
     console = Console()
     init_db()
 
-    if not args.message:
+    one_shot = args.message is not None or args.image is not None
+    if not one_shot:
         _banner(console)
 
     user = resolve_user(console, args.user)
 
-    if args.message:
-        _agent_reply(console, user, args.message, args.image, stream=not args.no_stream)
+    if one_shot:
+        if args.image and not os.path.isfile(os.path.expanduser(args.image)):
+            console.print(f"[red]no file at {args.image}[/red]")
+            return 1
+        image = os.path.expanduser(args.image) if args.image else None
+        _agent_reply(console, user, args.message or "", image, stream=not args.no_stream)
         console.print()
         return 0
 
