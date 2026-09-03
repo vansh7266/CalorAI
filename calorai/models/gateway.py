@@ -15,10 +15,15 @@ Providers:
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TypeVar
 
 from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.runnables import Runnable
+from pydantic import BaseModel
 
 from calorai.config import ModelSpec, get_settings
+
+_Schema = TypeVar("_Schema", bound=BaseModel)
 
 # A non-empty placeholder for providers whose key travels in a header, not the
 # Authorization bearer slot. The OpenAI client rejects an empty api_key.
@@ -103,3 +108,13 @@ def get_vision_model(*, temperature: float = 0.0, max_tokens: int = 900) -> Base
 def get_worker_model(*, temperature: float = 0.0, max_tokens: int = 700) -> BaseChatModel:
     """Background work: the reflection pass and nutrition-estimate fallback."""
     return _cached_model("worker", temperature, max_tokens, False)
+
+
+def as_structured(model: BaseChatModel, schema: type[_Schema]) -> Runnable[object, _Schema]:
+    """Bind a Pydantic schema for structured output.
+
+    Forces `method="function_calling"` - Sarvam's OpenAI-compatible endpoint does
+    not implement the native `json_schema` response format, and function calling
+    works across every provider we support.
+    """
+    return model.with_structured_output(schema, method="function_calling")
