@@ -285,22 +285,18 @@ def get_daily_totals(date: str | None = None) -> dict:
 
 
 @tool
-def get_meals(date: str | None = None, start_date: str | None = None, end_date: str | None = None) -> dict:
+def get_meals(date: str | None = None) -> dict:
     """Look up meals the user has logged.
 
-    - no arguments  -> the 10 most recent meals
-    - date          -> every meal on that day
-    - start_date + end_date -> meals in that range (inclusive)
+    date omitted        -> the 10 most recent meals
+    date = "yesterday"  -> every meal that day (also accepts "today", a weekday, or YYYY-MM-DD)
 
-    Use this to resolve 'same as yesterday', to find a meal to correct, or to
-    answer 'what did I eat on ...'. Dates accept 'today', 'yesterday', a weekday,
-    or YYYY-MM-DD.
+    Use this to resolve "same as yesterday" (look up that day, then log_meal with
+    the same items), to find a meal to correct, or to answer "what did I eat on ...".
     """
     try:
         ctx = get_context()
-        if start_date and end_date:
-            meals = repo.get_meals_between(ctx.user_id, ctx.resolve_date(start_date), ctx.resolve_date(end_date))
-        elif date:
+        if date:
             meals = repo.get_meals_for_date(ctx.user_id, ctx.resolve_date(date))
         else:
             meals = repo.get_recent_meals(ctx.user_id, limit=10)

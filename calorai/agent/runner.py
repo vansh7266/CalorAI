@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from calorai.agent.context import TurnContext, new_turn_id, reset_context, set_context
 from calorai.agent.graph import build_app
+from calorai.agent.memory import schedule_reflection
 
 
 def _initial_state(user_text: str, *, user_id: str, turn_id: str, timezone_name: str, image_path: str | None) -> dict:
@@ -54,10 +55,13 @@ def run_turn(
             user_text, user_id=user_id, turn_id=ctx.turn_id, timezone_name=timezone_name, image_path=image_path
         )
         result = app.invoke(state, config)
+        reply = "(no reply)"
         for message in reversed(result["messages"]):
             if isinstance(message, AIMessage) and message.content and not message.tool_calls:
-                return message.content if isinstance(message.content, str) else str(message.content)
-        return "(no reply)"
+                reply = message.content if isinstance(message.content, str) else str(message.content)
+                break
+        schedule_reflection(user_id, ctx.turn_id, user_text, reply)
+        return reply
     finally:
         reset_context(token)
 
@@ -96,13 +100,17 @@ def stream_turn(
                 pending.append(text)
                 yield text
 
-        if not pending:
+        reply = "".join(pending)
+        if not reply:
             # Nothing streamed (e.g. the provider returned the final message whole).
             # Read it from the checkpointed state rather than re-running the turn.
             snapshot = app.get_state(config)
             for message in reversed(snapshot.values.get("messages", [])):
                 if isinstance(message, AIMessage) and message.content and not message.tool_calls:
-                    yield message.content if isinstance(message.content, str) else str(message.content)
+                    reply = message.content if isinstance(message.content, str) else str(message.content)
+                    yield reply
                     break
+
+        schedule_reflection(user_id, ctx.turn_id, user_text, reply)
     finally:
         reset_context(token)

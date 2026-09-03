@@ -3,8 +3,8 @@
     ingest -> load_context -> agent <-> tools -> (end)
 
 * ingest        - classify the input, put the user text on the state
-* load_context  - pull today's totals and the most recent meal into the state
-                  (the memory card is added here in phase 2, vision in phase 3)
+* load_context  - pull today's totals, the most recent meal, and the memory
+                  profile card into the state (vision result is added in phase 3)
 * agent         - the text model with tools bound; decides to call a tool or reply
 * tools         - run the tool calls, loop back to agent (capped by AGENT_MAX_LOOPS)
 
@@ -23,12 +23,15 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.prebuilt import ToolNode
 
 from calorai.agent.context import get_context
+from calorai.agent.memory import MEMORY_TOOLS, render_profile_card
 from calorai.agent.prompts import build_system_prompt
 from calorai.agent.state import AgentState
 from calorai.agent.tools import LOGGING_TOOLS
 from calorai.config import DB_PATH, ensure_data_dir, get_settings
 from calorai.db import repositories as repo
 from calorai.models.gateway import get_text_model
+
+AGENT_TOOLS = LOGGING_TOOLS + MEMORY_TOOLS
 
 
 def _ingest(state: AgentState) -> dict:
@@ -65,7 +68,7 @@ def _load_context(state: AgentState) -> dict:
             "items": [{"name": i.name, "quantity": i.quantity} for i in m.items],
         }
 
-    return {"today_totals": today, "last_meal": last_meal}
+    return {"today_totals": today, "last_meal": last_meal, "memory_card": render_profile_card(ctx.user_id)}
 
 
 def _agent(state: AgentState) -> dict:
@@ -78,7 +81,7 @@ def _agent(state: AgentState) -> dict:
     model = get_text_model(streaming=True)
     tool_rounds = sum(1 for m in state["messages"] if m.type == "tool")
     if tool_rounds < get_settings().agent_max_loops:
-        model = model.bind_tools(LOGGING_TOOLS)
+        model = model.bind_tools(AGENT_TOOLS)
     else:
         # Loop cap reached: force a plain-text answer instead of another tool call.
         system += "\n\n(You have already used several tools this turn. Reply to the user now in plain text.)"
@@ -108,7 +111,7 @@ def build_app():
     graph.add_node("ingest", _ingest)
     graph.add_node("load_context", _load_context)
     graph.add_node("agent", _agent)
-    graph.add_node("tools", ToolNode(LOGGING_TOOLS))
+    graph.add_node("tools", ToolNode(AGENT_TOOLS))
 
     graph.add_edge(START, "ingest")
     graph.add_edge("ingest", "load_context")
