@@ -33,7 +33,7 @@ from calorai.agent.prompts import build_system_prompt
 from calorai.agent.recovery import looks_like_leaked_tool_call, recover_tool_calls, strip_leaked_markup
 from calorai.agent.state import AgentState
 from calorai.agent.tools import LOGGING_TOOLS
-from calorai.config import DB_PATH, ensure_data_dir, get_settings
+from calorai.config import CHECKPOINT_PATH, ensure_data_dir, get_settings
 from calorai.db import repositories as repo
 from calorai.models.gateway import get_text_model
 from calorai.vision.extract import extract_food_from_image
@@ -154,7 +154,11 @@ def _agent(state: AgentState) -> dict:
         model = model.bind_tools(AGENT_TOOLS)
     else:
         # Loop cap for THIS turn reached: force a plain-text answer.
-        system += "\n\n(You have already used several tools on this message. Reply to the user now in plain text.)"
+        system += (
+            "\n\n(You have already used several tools on this message. Reply to the user now in "
+            "plain text. If the recent tool results were errors, say plainly that something went "
+            "wrong and nothing was changed - do NOT claim a change succeeded.)"
+        )
 
     messages = [SystemMessage(content=system), *_recent_window(state["messages"])]
     try:
@@ -198,7 +202,11 @@ def _route_after_agent(state: AgentState) -> str:
 @lru_cache(maxsize=1)
 def _checkpointer() -> SqliteSaver:
     ensure_data_dir()
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    # Its own file, separate from the application tables, so LangGraph's per-node
+    # state writes never lock out a meal or memory write (and vice versa).
+    conn = sqlite3.connect(CHECKPOINT_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 5000")
     return SqliteSaver(conn)
 
 

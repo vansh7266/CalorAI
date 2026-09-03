@@ -57,11 +57,19 @@ DATA_DIR = Path(os.getenv("CALORAI_DATA_DIR") or _default_data_dir()).expanduser
 DB_PATH = Path(os.getenv("CALORAI_DB_PATH") or (DATA_DIR / "calorai.db")).expanduser()
 SESSION_FILE = DATA_DIR / ".session"  # remembers the last-used user id
 
+# LangGraph's checkpointer keeps its own long-lived connection and writes graph
+# state after every node. Keeping that in a separate file from the application
+# tables means those writes never contend with meal / memory writes.
+CHECKPOINT_PATH = Path(
+    os.getenv("CALORAI_CHECKPOINT_PATH") or (DB_PATH.parent / "checkpoints.db")
+).expanduser()
+
 
 def ensure_data_dir() -> None:
-    """Create the data directory (and the DB's parent, if set elsewhere)."""
+    """Create the data directory (and the DB / checkpoint parents, if set elsewhere)."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CHECKPOINT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 # --- Providers ---

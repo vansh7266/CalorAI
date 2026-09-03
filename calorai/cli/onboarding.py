@@ -73,6 +73,11 @@ def _first_run(console: Console) -> User:
     )
     answer = Prompt.ask("[bold]Your name (or CalorAI id)[/bold]", default="guest", console=console).strip()
 
+    if answer.startswith("/"):
+        # they typed a slash-command at the name prompt
+        console.print("[yellow]That looks like a command. Using 'guest' for now - you can start over anytime.[/yellow]")
+        answer = "guest"
+
     if answer.startswith("usr_"):
         existing = repo.get_user(answer)
         if existing:

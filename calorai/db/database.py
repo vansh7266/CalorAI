@@ -8,6 +8,7 @@ callers can use column names.
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -18,6 +19,13 @@ from calorai.db.migrations import CURRENT_VERSION, apply_migrations
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 _schema_applied = False
+
+# One writer at a time within the process. The reflection pass writes memory from
+# a background thread while a turn may be writing a meal on the main thread;
+# serialising here keeps them from racing for SQLite's write lock. Writes are all
+# short pure-SQL blocks, so holding this briefly costs nothing. Reads don't take
+# it - WAL lets them run concurrently.
+_write_lock = threading.Lock()
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -59,14 +67,21 @@ def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
 
 @contextmanager
 def transaction(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
-    """Run a block of writes atomically, rolling back on any exception."""
-    conn = get_connection(db_path)
-    try:
-        conn.execute("BEGIN")
-        yield conn
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-    finally:
-        conn.close()
+    """Run a block of writes atomically, rolling back on any exception.
+
+    Serialised process-wide (see `_write_lock`) and opened with `BEGIN IMMEDIATE`
+    so the write lock is taken up front - a deferred `BEGIN` that upgrades to a
+    writer only on the first UPDATE can deadlock against another connection that
+    is doing the same thing.
+    """
+    with _write_lock:
+        conn = get_connection(db_path)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
