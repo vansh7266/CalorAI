@@ -36,7 +36,8 @@ def main() -> None:
         "# CalorAI agent graph\n\n"
         "Generated from the compiled LangGraph with `python scripts/render_graph.py`.\n\n"
         "```mermaid\n" + mermaid + "\n```\n\n"
-        "```text\n" + ascii_art + "\n```\n"
+        "```text\n" + ascii_art + "\n```\n",
+        encoding="utf-8",
     )
     print(f"\nwrote {md}")
 

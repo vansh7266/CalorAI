@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 from datetime import date
-from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -24,23 +23,21 @@ from calorai.db.records import User
 
 
 def detect_timezone() -> str:
-    """Best-effort local IANA timezone name, falling back to UTC."""
+    """Local IANA timezone name (works on macOS / Linux / Windows), or UTC."""
     override = os.getenv("CALORAI_TZ")
     if override:
         return override
     try:
-        link = Path("/etc/localtime").resolve()
-        parts = link.parts
-        if "zoneinfo" in parts:
-            return "/".join(parts[parts.index("zoneinfo") + 1 :])
-    except OSError:
-        pass
-    return "UTC"
+        from tzlocal import get_localzone_name
+
+        return get_localzone_name() or "UTC"
+    except Exception:
+        return "UTC"
 
 
 def _read_last_user_id() -> str | None:
     try:
-        return SESSION_FILE.read_text().strip() or None
+        return SESSION_FILE.read_text(encoding="utf-8").strip() or None
     except OSError:
         return None
 
@@ -48,7 +45,7 @@ def _read_last_user_id() -> str | None:
 def remember_user(user_id: str) -> None:
     ensure_data_dir()
     try:
-        SESSION_FILE.write_text(user_id)
+        SESSION_FILE.write_text(user_id, encoding="utf-8")
     except OSError:
         pass
 

@@ -58,7 +58,7 @@ def _run_case(case: dict) -> tuple[bool, list, float, str]:
 
 
 def main() -> int:
-    cases = yaml.safe_load(CASES_FILE.read_text())
+    cases = yaml.safe_load(CASES_FILE.read_text(encoding="utf-8"))
     flt = sys.argv[1].lower() if len(sys.argv) > 1 else None
     if flt:
         cases = [c for c in cases if flt in c["id"].lower() or flt in c["category"].lower()]

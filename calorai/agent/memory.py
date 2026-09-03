@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+import threading
 from datetime import date, timedelta
 
 from langchain_core.tools import tool
@@ -31,7 +31,6 @@ from calorai.models.gateway import as_structured, get_worker_model
 _CARD_TYPES = ["diet", "goal", "preference"]
 _CARD_LIMIT = 6
 
-_reflection_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="calorai-reflect")
 
 
 # --- profile card (tier 1) ---
@@ -247,9 +246,17 @@ def run_reflection(user_id: str, turn_id: str, user_text: str, agent_reply: str)
 
 
 def schedule_reflection(user_id: str, turn_id: str, user_text: str, agent_reply: str) -> None:
-    """Run the reflection pass off the response path. Set CALORAI_SYNC_REFLECTION=1
+    """Run the reflection pass off the response path, on a daemon thread so it
+    never delays the reply or blocks a clean exit. Set CALORAI_SYNC_REFLECTION=1
     to run it inline (used by tests and the eval harness)."""
     if os.getenv("CALORAI_SYNC_REFLECTION") in ("1", "true", "yes"):
         run_reflection(user_id, turn_id, user_text, agent_reply)
         return
-    _reflection_pool.submit(run_reflection, user_id, turn_id, user_text, agent_reply)
+
+    def _safe() -> None:
+        try:
+            run_reflection(user_id, turn_id, user_text, agent_reply)
+        except Exception:
+            pass
+
+    threading.Thread(target=_safe, name="calorai-reflect", daemon=True).start()

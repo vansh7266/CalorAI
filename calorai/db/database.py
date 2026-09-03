@@ -35,7 +35,7 @@ def init_db(db_path: Path | None = None) -> None:
     ensure_data_dir()
     conn = _connect(path)
     try:
-        conn.executescript(_SCHEMA_PATH.read_text())
+        conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
     finally:
         conn.close()
     if db_path is None:
