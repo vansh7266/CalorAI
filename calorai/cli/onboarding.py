@@ -68,12 +68,23 @@ def _first_run(console: Console) -> User:
     console.print(
         Panel(
             "Hi! I'm CalorAI. Tell me what you eat - text or a photo - and I'll keep track.\n"
-            "First time here, so let's set you up.",
+            "New here? Just tell me your name. Already have a CalorAI id? Paste it instead.",
             border_style="green",
             title="CalorAI",
         )
     )
-    name = Prompt.ask("[bold]What should I call you?[/bold]", default="guest", console=console).strip() or "guest"
+    answer = Prompt.ask("[bold]Your name (or CalorAI id)[/bold]", default="guest", console=console).strip()
+
+    if answer.startswith("usr_"):
+        existing = repo.get_user(answer)
+        if existing:
+            remember_user(existing.id)
+            _greet_returning(console, existing)
+            return existing
+        console.print(f"[yellow]No user with id '{answer}'. Creating a new one.[/yellow]")
+        answer = "guest"
+
+    name = answer or "guest"
     user = repo.create_user(name, detect_timezone())
     console.print(
         Panel(

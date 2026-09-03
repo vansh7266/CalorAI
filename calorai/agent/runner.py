@@ -50,7 +50,7 @@ def run_turn(
     timezone_name: str = "UTC",
     image_path: str | None = None,
 ) -> str:
-    """Run one turn and return the agent's final reply as a string."""
+    """Run one turn and return the agent's final reply as a string. Never raises."""
     ctx = _turn_context(user_id, timezone_name)
     token = set_context(ctx)
     try:
@@ -68,6 +68,8 @@ def run_turn(
                 break
         schedule_reflection(user_id, ctx.turn_id, user_text, reply)
         return reply
+    except Exception:
+        return "Something went wrong on my end - your logged meals are safe. Please try again."
     finally:
         reset_context(token)
 
@@ -95,27 +97,32 @@ def stream_turn(
         )
 
         pending: list[str] = []
-        for chunk, meta in app.stream(state, config, stream_mode="messages"):
-            if meta.get("langgraph_node") != "agent":
-                continue
-            if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
-                pending.clear()  # this agent turn is a tool call, not the answer
-                continue
-            text = chunk.content if isinstance(chunk.content, str) else ""
-            if text:
-                pending.append(text)
-                yield strip_markdown_chunk(text)
+        try:
+            for chunk, meta in app.stream(state, config, stream_mode="messages"):
+                if meta.get("langgraph_node") != "agent":
+                    continue
+                if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
+                    pending.clear()  # this agent turn is a tool call, not the answer
+                    continue
+                text = chunk.content if isinstance(chunk.content, str) else ""
+                if text:
+                    pending.append(text)
+                    yield strip_markdown_chunk(text)
 
-        raw = "".join(pending)
-        if not raw:
-            # Nothing streamed (e.g. the provider returned the final message whole).
-            # Read it from the checkpointed state rather than re-running the turn.
-            snapshot = app.get_state(config)
-            for message in reversed(snapshot.values.get("messages", [])):
-                if isinstance(message, AIMessage) and message.content and not message.tool_calls:
-                    raw = message.content if isinstance(message.content, str) else str(message.content)
-                    yield clean_reply(raw)
-                    break
+            raw = "".join(pending)
+            if not raw:
+                # Nothing streamed (provider returned the final message whole).
+                # Read it from the checkpointed state rather than re-running the turn.
+                snapshot = app.get_state(config)
+                for message in reversed(snapshot.values.get("messages", [])):
+                    if isinstance(message, AIMessage) and message.content and not message.tool_calls:
+                        raw = message.content if isinstance(message.content, str) else str(message.content)
+                        yield clean_reply(raw)
+                        break
+        except Exception:
+            if not pending:
+                yield "Something went wrong on my end - your logged meals are safe. Please try again."
+            raw = "".join(pending)
 
         schedule_reflection(user_id, ctx.turn_id, user_text, clean_reply(raw))
     finally:

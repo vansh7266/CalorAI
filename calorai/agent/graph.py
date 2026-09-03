@@ -51,28 +51,42 @@ def _ingest(state: AgentState) -> dict:
 
 
 def _load_context(state: AgentState) -> dict:
+    """Best-effort context load. A DB hiccup here should not kill the turn - the
+    agent can still answer, just with less context."""
     ctx = get_context()
-    totals = repo.daily_totals(ctx.user_id, ctx.local_date).rounded()
-    today = {
-        "kcal": totals.kcal,
-        "protein_g": totals.protein_g,
-        "carbs_g": totals.carbs_g,
-        "fat_g": totals.fat_g,
-        "meal_count": totals.meal_count,
-    }
+    out: dict = {"today_totals": None, "last_meal": None, "memory_card": ""}
 
-    last_meal = None
-    recent = repo.get_recent_meals(ctx.user_id, limit=1)
-    if recent:
-        m = recent[0]
-        last_meal = {
-            "meal_id": m.id,
-            "description": m.description,
-            "meal_date": m.meal_date,
-            "items": [{"name": i.name, "quantity": i.quantity} for i in m.items],
+    try:
+        totals = repo.daily_totals(ctx.user_id, ctx.local_date).rounded()
+        out["today_totals"] = {
+            "kcal": totals.kcal,
+            "protein_g": totals.protein_g,
+            "carbs_g": totals.carbs_g,
+            "fat_g": totals.fat_g,
+            "meal_count": totals.meal_count,
         }
+    except Exception:
+        pass
 
-    return {"today_totals": today, "last_meal": last_meal, "memory_card": render_profile_card(ctx.user_id)}
+    try:
+        recent = repo.get_recent_meals(ctx.user_id, limit=1)
+        if recent:
+            m = recent[0]
+            out["last_meal"] = {
+                "meal_id": m.id,
+                "description": m.description,
+                "meal_date": m.meal_date,
+                "items": [{"name": i.name, "quantity": i.quantity} for i in m.items],
+            }
+    except Exception:
+        pass
+
+    try:
+        out["memory_card"] = render_profile_card(ctx.user_id)
+    except Exception:
+        pass
+
+    return out
 
 
 def _vision_extract(state: AgentState) -> dict:
@@ -106,7 +120,18 @@ def _agent(state: AgentState) -> dict:
         system += "\n\n(You have already used several tools this turn. Reply to the user now in plain text.)"
 
     messages = [SystemMessage(content=system), *state["messages"]]
-    return {"messages": [model.invoke(messages)]}
+    try:
+        return {"messages": [model.invoke(messages)]}
+    except Exception:
+        # Model/API failure - keep the graph (and the conversation) alive.
+        return {
+            "messages": [
+                AIMessage(
+                    content="Sorry, I hit a snag reaching my brain just now. "
+                    "Nothing you've logged is lost - try that again in a moment."
+                )
+            ]
+        }
 
 
 def _route_after_agent(state: AgentState) -> str:
