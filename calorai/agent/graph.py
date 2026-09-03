@@ -75,7 +75,7 @@ def _agent(state: AgentState) -> dict:
         last_meal=state.get("last_meal"),
     )
 
-    model = get_text_model()
+    model = get_text_model(streaming=True)
     tool_rounds = sum(1 for m in state["messages"] if m.type == "tool")
     if tool_rounds < get_settings().agent_max_loops:
         model = model.bind_tools(LOGGING_TOOLS)
