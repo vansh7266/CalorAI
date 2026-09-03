@@ -13,11 +13,28 @@ import os
 import sys
 
 from rich.console import Console
+from rich.panel import Panel
 
 from calorai.cli.commands import dispatch
 from calorai.cli.onboarding import resolve_user
+from calorai.config import get_settings
 from calorai.db.database import init_db
 from calorai.db.records import User
+
+
+def _banner(console: Console) -> None:
+    settings = get_settings()
+    lines = [
+        "[bold]CalorAI[/bold]  —  meal logging that texts back",
+        f"[dim]text model {settings.text_model.provider}/{settings.text_model.model}"
+        f"  ·  vision {settings.vision_model.provider}/{settings.vision_model.model}[/dim]",
+    ]
+    if settings.langsmith_tracing:
+        lines.append(
+            f"[dim]monitoring (for the walkthrough): LangSmith project "
+            f"'{settings.langsmith_project}'  ·  https://smith.langchain.com[/dim]"
+        )
+    console.print(Panel("\n".join(lines), border_style="magenta", expand=False))
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -95,6 +112,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     console = Console()
     init_db()
+
+    if not args.message:
+        _banner(console)
 
     user = resolve_user(console, args.user)
 
