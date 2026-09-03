@@ -1,0 +1,216 @@
+# CalorAI eval set.
+#
+# Each case:
+#   id / category  - identifiers
+#   setup          - messages run before the test message (fresh DB per case)
+#   message        - the message under test  (or: image + caption)
+#   expect         - assertions, see evals/graders.py
+#
+# Covers the 11 messages from the task brief + edge / hard cases.
+
+# --- extraction -----------------------------------------------------------------
+
+- id: extract_parathas_chai
+  category: extraction
+  setup: []
+  message: "had 2 parathas and chai for breakfast"
+  expect:
+    meals_today: 1
+    has_items: ["paratha", "chai"]
+    item_quantity: {paratha: 2}
+    meal_type: {b: breakfast}
+
+- id: extract_leftover_biryani
+  category: extraction
+  setup: []
+  message: "leftover biryani, maybe two thirds of the box"
+  expect:
+    meals_today: 1
+    has_items: ["biryani"]
+    total_kcal_between: [200, 700]
+
+- id: extract_two_rotis
+  category: extraction
+  setup: []
+  message: "had 2 rotis"
+  expect:
+    meals_today: 1
+    item_quantity: {roti: 2}
+    total_kcal_between: [180, 240]
+
+# --- corrections ---------------------------------------------------------------
+
+- id: correction_rotis_no_double_count
+  category: correction
+  setup:
+    - "had 2 rotis for lunch"
+  message: "actually that was 3 rotis not 2"
+  expect:
+    meals_today: 1
+    item_quantity: {roti: 3}
+    total_kcal_between: [280, 340]
+
+- id: correction_remove_item
+  category: correction
+  setup:
+    - "had rice and 2 rotis for lunch"
+  message: "actually I didn't have the rice"
+  expect:
+    meals_today: 1
+    no_item_matching: ["rice"]
+    total_kcal_between: [180, 240]
+
+- id: correction_meal_type
+  category: correction
+  setup:
+    - "had biryani for dinner"
+  message: "that biryani was lunch actually, not dinner"
+  expect:
+    meals_today: 1
+    meal_type: {m: lunch}
+
+- id: correction_double
+  category: correction
+  setup:
+    - "had 2 rotis"
+    - "actually make that 3"
+  message: "sorry, 4 rotis"
+  expect:
+    meals_today: 1
+    item_quantity: {roti: 4}
+
+# --- totals ------------------------------------------------------------------
+
+- id: totals_after_delete
+  category: totals
+  setup:
+    - "had a bowl of rice and 2 rotis for lunch"
+  message: "actually scrap that whole lunch, I didn't eat it"
+  expect:
+    meals_today: 0
+    total_kcal_between: [0, 0]
+
+- id: totals_query_protein
+  category: totals
+  setup:
+    - "3 boiled eggs for breakfast"
+  message: "how much protein have I had today?"
+  expect:
+    reply_contains_any: ["18", "17", "19"]
+
+- id: totals_query_calories
+  category: totals
+  setup:
+    - "had 2 rotis and dal"
+  message: "how am I doing on calories?"
+  expect:
+    reply_contains_any: ["39", "40", "38"]
+
+# --- memory: write -----------------------------------------------------------
+
+- id: memory_write_vegetarian
+  category: memory-write
+  setup: []
+  message: "i'm vegetarian btw"
+  expect:
+    memory_has: {type: diet, contains: veg}
+
+- id: memory_write_protein_goal
+  category: memory-write
+  setup: []
+  message: "i'm trying to hit 140g of protein a day"
+  expect:
+    memory_has: {type: goal, contains: "140"}
+
+# --- memory: use -----------------------------------------------------------
+
+- id: memory_use_vegetarian_conflict
+  category: memory-use
+  setup:
+    - "i'm vegetarian"
+  message: "had a chicken sandwich for lunch"
+  expect:
+    meals_today: 0
+    reply_asks: true
+
+- id: memory_use_protine_target_in_answer
+  category: memory-use
+  setup:
+    - "my protein target is 140g a day"
+    - "had 3 boiled eggs"
+  message: "how am I doing on protein?"
+  expect:
+    reply_contains_any: ["140"]
+
+# --- routines --------------------------------------------------------------
+
+- id: routine_my_usual_after_saving
+  category: routine
+  setup:
+    - "my usual breakfast is 2 idlis and a filter coffee"
+  message: "just log my usual"
+  expect:
+    meals_today: 1
+    has_items: ["idli", "coffee"]
+
+- id: routine_my_usual_not_saved
+  category: routine
+  setup: []
+  message: "log my usual"
+  expect:
+    meals_today: 0
+    reply_asks: true
+
+# --- episodic ------------------------------------------------------------------
+
+- id: episodic_same_as_yesterday
+  category: episodic
+  setup:
+    - "had rajma and rice for lunch yesterday"
+  message: "for lunch today, same as yesterday"
+  expect:
+    meals_today: 1
+    has_items: ["rajma", "rice"]
+
+# --- ambiguity ------------------------------------------------------------------
+
+- id: ambiguity_grazed_all_afternoon
+  category: ambiguity-dont-invent
+  setup: []
+  message: "skipped lunch but grazed all afternoon"
+  expect:
+    meals_today: 0
+    reply_asks: true
+
+- id: ambiguity_non_food
+  category: ambiguity-dont-invent
+  setup: []
+  message: "what's the weather like today?"
+  expect:
+    meals_today: 0
+
+- id: lookup_not_log
+  category: ambiguity-dont-invent
+  setup: []
+  message: "how many calories in a samosa?"
+  expect:
+    meals_today: 0
+    reply_contains_any: ["cal", "kcal", "calorie"]
+
+# --- multimodal ---------------------------------------------------------------
+
+- id: multimodal_plain_photo
+  category: multimodal
+  setup: []
+  image: "samples/paratha_plate.png"
+  caption: ""
+  expect:
+    meals_today: 1
+
+- id: multimodal_caption_half
+  category: multimodal
+  setup: []
+  image: "samples/pork_plate.jpg"
+  caption: "half of this was my brother's"
+  expect:
+    meals_today: 1
