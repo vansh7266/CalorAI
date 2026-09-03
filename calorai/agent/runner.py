@@ -120,7 +120,7 @@ def stream_turn(
                 if looks_like_leaked_tool_call(buffer):
                     buffer = ""  # the agent node will recover it; stream nothing here
                     continue
-                if len(buffer) > 40:
+                if len(buffer) > 16:  # enough to have seen a "<tool_call" marker
                     streamed += buffer
                     yield strip_markdown_chunk(buffer)
                     buffer, flushing = "", True

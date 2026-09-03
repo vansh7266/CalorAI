@@ -58,20 +58,28 @@ def _agent_reply(console: Console, user: User, text: str, image_path: str | None
             console.print(f"[bold green]CalorAI[/bold green]  {reply}")
             return
 
+        # Hold the spinner until the first chunk arrives, THEN print the label +
+        # stream. (Printing the label before console.status lets the spinner's
+        # live display swallow it.)
+        chunks = stream_turn(text, user_id=user.id, thread_id=user.id,
+                             timezone_name=user.timezone, image_path=image_path)
+        first = None
+        with console.status("[dim]thinking…[/dim]", spinner="dots"):
+            for chunk in chunks:
+                if chunk:
+                    first = chunk
+                    break
+
         console.print("[bold green]CalorAI[/bold green]  ", end="")
-        started = False
-        with console.status("[dim]thinking…[/dim]", spinner="dots") as status:
-            for chunk in stream_turn(text, user_id=user.id, thread_id=user.id,
-                                     timezone_name=user.timezone, image_path=image_path):
-                if not started:
-                    status.stop()
-                    started = True
-                console.print(chunk, end="")
-        if not started:
-            console.print("[dim](no reply)[/dim]", end="")
+        if first is None:
+            console.print("[dim](no reply)[/dim]")
+            return
+        console.print(first, end="")
+        for chunk in chunks:
+            console.print(chunk, end="")
         console.print()
     except Exception as exc:  # keep the REPL alive on any agent failure
-        console.print(f"[red]Something went wrong: {exc}[/red]")
+        console.print(f"\n[red]Something went wrong: {exc}[/red]")
         console.print("[dim]Your data is safe. Try rephrasing, or /quit.[/dim]")
 
 
