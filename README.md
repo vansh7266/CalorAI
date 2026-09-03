@@ -5,8 +5,12 @@ plain language, by text or photo, no forms. It keeps an accurate running daily
 total, remembers what matters about you between sessions, and replies at messaging
 speed.
 
-Built with LangGraph. Text runs on GLM-5.2, photos run on a separate vision model
-(Gemma 4). SQLite for persistence. Runs locally as a CLI.
+Built with LangGraph. SQLite for persistence. Runs locally as a CLI.
+
+The default setup runs text on **GLM-5.2** and photos on a separate vision model,
+**Gemma 4** (both via Sarvam). Both models are configurable — you can point them at
+OpenAI, Anthropic, Google, or Groq instead. See
+[Using another provider](#using-another-provider).
 
 ---
 
@@ -62,17 +66,23 @@ is how you resume the same history later.
 
 ### Using another provider
 
-The gateway is provider-agnostic. To run on OpenAI, Anthropic, Google, or Groq
-instead of Sarvam, set `MODEL_PROFILE` and the matching key in `.env`, and — for
-every provider except Sarvam — set `TEXT_MODEL` and `VISION_MODEL` to current model
-names (hosted names change often, so there is no built-in default). Anthropic and
-Google also need an extra install:
+The gateway is provider-agnostic. Two ways to configure it, both in `.env`:
+
+- **One provider for everything** — set `MODEL_PROFILE` (`openai` / `anthropic` /
+  `google` / `groq` / `sarvam`) and its API key. For any provider except Sarvam,
+  also set `TEXT_MODEL` and `VISION_MODEL` (hosted names change often, so there is
+  no built-in default).
+- **A different provider per role** — e.g. text on OpenAI, vision on Google: set
+  `TEXT_PROVIDER` / `TEXT_MODEL` and `VISION_PROVIDER` / `VISION_MODEL` separately,
+  and include the API key for each. The worker model follows the text model unless
+  you set `WORKER_PROVIDER` / `WORKER_MODEL`.
+
+`.env.example` has a worked example of each. Anthropic and Google need an extra
+install:
 
 ```bash
 pip install -e ".[anthropic]"      # or ".[google]"
 ```
-
-`.env.example` has commented examples for each provider.
 
 ---
 
@@ -104,6 +114,9 @@ Examples:
 /img "~/My Photos/dinner plate.jpg"          # quote paths that contain spaces
 ```
 
+- The path can be relative to where you started `calorai`, or a full/absolute path
+  pasted as-is (`~` expands; on Windows `C:\Users\...\lunch.jpg` is fine). Wrap it
+  in quotes only if it contains spaces.
 - Supported formats: `.jpg` `.jpeg` `.png` `.webp` `.gif` `.bmp`, up to 20 MB.
 - A photo plus a caption is treated as **one meal** — the caption adjusts the
   vision items (e.g. "half was my brother's" halves the portions).
@@ -149,6 +162,11 @@ automatically. `python cli.py ...` works everywhere `calorai` does.
 
 One LangGraph state machine per turn. State is checkpointed to SQLite per user, so
 a conversation survives a restart and each user's thread is isolated.
+
+Two database files under `data/`: `calorai.db` holds the application tables
+(meals, items, memory, edits, nutrition cache); `checkpoints.db` holds LangGraph's
+per-turn graph state. Keeping them apart means graph-state writes never lock out a
+meal or memory write.
 
 ```
               ingest
@@ -414,10 +432,12 @@ python evals/run.py    # eval set (needs an API key)
 
 | Bonus | Status | Where |
 |---|---|---|
-| LangSmith tracing | Done | set `LANGSMITH_TRACING=true` in `.env` |
+| LangSmith tracing | Done | in `.env`, set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY=...` (free at smith.langchain.com) |
 | Eval set with a defined "correct" | Done | `evals/` — 23 cases, `graders.py` |
 | Streaming responses | Done | default in the CLI; `--no-stream` to disable |
 | Multiple users / session isolation | Done | LangGraph thread = user id; per-user checkpoint |
+
+Public LangSmith trace: https://smith.langchain.com/public/b72a0407-be4d-4793-8767-764646aff886/r/01a0695d-2b45-7ed2-90f2-82432593284b
 
 ---
 
@@ -446,7 +466,7 @@ Two tools, two distinct roles.
   decisions were locked one part at a time before any code was written.
 - Then used to implement the whole thing end to end and to test and fix as it went.
 
-**Codex (GPT-5.x) — independent reviewer.**
+**Codex (GPT-5.6) — independent reviewer.**
 - Reviewed every part of the implementation, ran its own tests, and produced a
   written report.
 - Each finding was handed back, verified by hand, and only the valid ones were
@@ -469,7 +489,7 @@ calorai/
   models/       provider-agnostic model gateway
   nutrition/    seed table + resolver (seed → cache → model)
   vision/       image → structured items (separate model)
-  db/           schema, migrations, repositories
+  db/           schema, migrations, repositories, write serialisation
   cli/          chat loop, onboarding, slash commands
 evals/          eval set + grader
 benchmarks/     latency harness
