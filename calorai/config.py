@@ -1,0 +1,251 @@
+"""Application configuration.
+
+This is the only module that reads environment variables. Everything else asks
+`get_settings()` for what it needs.
+
+The `MODEL_PROFILE` env var picks a provider (sarvam / openai / anthropic /
+google / groq). Sarvam ships working model names because that is what the
+project was built and tested against; for the other providers you set
+`TEXT_MODEL` and `VISION_MODEL` yourself, since hosted model names change often
+and a stale default would only fail in a confusing way later.
+"""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+# --- Paths ---
+
+PACKAGE_ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = PACKAGE_ROOT.parent
+
+DATA_DIR = Path(os.getenv("CALORAI_DATA_DIR", PROJECT_ROOT / "data")).expanduser()
+DB_PATH = Path(os.getenv("CALORAI_DB_PATH", DATA_DIR / "calorai.db")).expanduser()
+SESSION_FILE = DATA_DIR / ".session"  # remembers the last-used user id
+
+
+def ensure_data_dir() -> None:
+    """Create the local data directory if it does not exist yet."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# --- Providers ---
+
+# How each provider is reached. "auth" is one of:
+#   bearer  -> Authorization: Bearer <key>       (OpenAI, Groq, OpenAI-compatible)
+#   header  -> a custom header carries the key   (Sarvam)
+#   native  -> the provider's LangChain package handles auth (Anthropic, Google)
+PROVIDERS = {
+    "sarvam": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.sarvam.ai/v2",
+        "api_key_env": "SARVAM_API_KEY",
+        "auth": "header",
+        "auth_header": "api-subscription-key",
+    },
+    "openai": {
+        "kind": "openai",
+        "base_url": None,
+        "api_key_env": "OPENAI_API_KEY",
+        "auth": "bearer",
+        "auth_header": None,
+    },
+    "groq": {
+        "kind": "openai_compatible",
+        "base_url": "https://api.groq.com/openai/v1",
+        "api_key_env": "GROQ_API_KEY",
+        "auth": "bearer",
+        "auth_header": None,
+    },
+    "anthropic": {
+        "kind": "anthropic",
+        "base_url": None,
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "auth": "native",
+        "auth_header": None,
+    },
+    "google": {
+        "kind": "google",
+        "base_url": None,
+        "api_key_env": "GOOGLE_API_KEY",
+        "auth": "native",
+        "auth_header": None,
+    },
+}
+
+# Default (provider, model) per profile and role. A None model means the user
+# must supply TEXT_MODEL / VISION_MODEL in .env for that profile.
+PROFILE_DEFAULTS = {
+    "sarvam": {
+        "text": ("sarvam", "glm5.2"),
+        "vision": ("sarvam", "gemma4"),
+    },
+    "openai": {
+        "text": ("openai", None),
+        "vision": ("openai", None),
+    },
+    "anthropic": {
+        "text": ("anthropic", None),
+        "vision": ("anthropic", None),
+    },
+    "google": {
+        "text": ("google", None),
+        "vision": ("google", None),
+    },
+    "groq": {
+        "text": ("groq", None),
+        "vision": ("groq", None),
+    },
+}
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+class ConfigError(RuntimeError):
+    """Configuration is missing or inconsistent. Raised early with a clear message."""
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """Everything the gateway needs to build one chat model."""
+
+    role: str  # "text" | "vision" | "worker"
+    provider: str
+    model: str
+    api_key: str
+    kind: str
+    base_url: str | None = None
+    auth: str = "bearer"
+    auth_header: str | None = None
+    extra_headers: dict[str, str] = field(default_factory=dict)
+
+    def redacted(self) -> str:
+        tail = self.api_key[-4:] if len(self.api_key) >= 4 else "----"
+        return f"{self.role} = {self.provider}/{self.model} (key ...{tail})"
+
+
+def _read(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
+
+
+def _make_spec(role: str, provider: str, model: str | None) -> ModelSpec:
+    if provider not in PROVIDERS:
+        valid = ", ".join(sorted(PROVIDERS))
+        raise ConfigError(f"Unknown provider '{provider}' for the {role} model. Use one of: {valid}.")
+
+    if not model:
+        raise ConfigError(
+            f"No model set for the {role} path. "
+            f"Set {role.upper()}_MODEL in your .env "
+            f"(the '{provider}' provider has no built-in default - check its docs for the current name)."
+        )
+
+    provider_info = PROVIDERS[provider]
+    api_key = _read(provider_info["api_key_env"])
+    if not api_key:
+        raise ConfigError(
+            f"Missing {provider_info['api_key_env']} for the '{provider}' provider "
+            f"(needed for the {role} model). Add it to your .env file."
+        )
+
+    headers: dict[str, str] = {}
+    if provider_info["auth"] == "header" and provider_info["auth_header"]:
+        headers[provider_info["auth_header"]] = api_key
+
+    return ModelSpec(
+        role=role,
+        provider=provider,
+        model=model,
+        api_key=api_key,
+        kind=provider_info["kind"],
+        base_url=provider_info["base_url"],
+        auth=provider_info["auth"],
+        auth_header=provider_info["auth_header"],
+        extra_headers=headers,
+    )
+
+
+def _resolve_role(role: str, profile: str, fallback: tuple[str, str] | None = None) -> ModelSpec:
+    """Resolve one model role from env overrides, the profile, then an optional fallback."""
+    if fallback is not None:
+        default_provider, default_model = fallback
+    else:
+        if profile not in PROFILE_DEFAULTS:
+            valid = ", ".join(sorted(PROFILE_DEFAULTS))
+            raise ConfigError(f"Unknown MODEL_PROFILE '{profile}'. Use one of: {valid}.")
+        default_provider, default_model = PROFILE_DEFAULTS[profile][role]
+
+    provider = _read(f"{role.upper()}_PROVIDER", default_provider)
+    model = _read(f"{role.upper()}_MODEL", default_model)
+    return _make_spec(role, provider, model)
+
+
+@dataclass(frozen=True)
+class Settings:
+    profile: str
+    text_model: ModelSpec
+    vision_model: ModelSpec
+    worker_model: ModelSpec  # background work: reflection pass, nutrition fallback
+
+    agent_max_loops: int
+    request_timeout_seconds: int
+
+    langsmith_tracing: bool
+    langsmith_project: str
+
+    def summary(self) -> str:
+        lines = [
+            f"profile: {self.profile}",
+            f"  {self.text_model.redacted()}",
+            f"  {self.vision_model.redacted()}",
+            f"  {self.worker_model.redacted()}",
+            f"agent max loops: {self.agent_max_loops}",
+            f"request timeout: {self.request_timeout_seconds}s",
+            f"langsmith tracing: {self.langsmith_tracing}",
+        ]
+        return "\n".join(lines)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    profile = _read("MODEL_PROFILE", "sarvam")
+
+    text_model = _resolve_role("text", profile)
+    vision_model = _resolve_role("vision", profile)
+    worker_model = _resolve_role("worker", profile, fallback=(text_model.provider, text_model.model))
+
+    tracing = (_read("LANGSMITH_TRACING", "false") or "false").lower() in _TRUTHY
+    if tracing:
+        os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+        os.environ["LANGSMITH_TRACING"] = "true"
+
+    try:
+        max_loops = int(_read("AGENT_MAX_LOOPS", "4"))
+        timeout = int(_read("REQUEST_TIMEOUT_SECONDS", "60"))
+    except ValueError:
+        raise ConfigError("AGENT_MAX_LOOPS and REQUEST_TIMEOUT_SECONDS must be whole numbers.")
+
+    if max_loops < 1:
+        raise ConfigError("AGENT_MAX_LOOPS must be at least 1.")
+
+    return Settings(
+        profile=profile,
+        text_model=text_model,
+        vision_model=vision_model,
+        worker_model=worker_model,
+        agent_max_loops=max_loops,
+        request_timeout_seconds=timeout,
+        langsmith_tracing=tracing,
+        langsmith_project=_read("LANGSMITH_PROJECT", "calorai-logging-agent"),
+    )

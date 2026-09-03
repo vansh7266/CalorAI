@@ -1,0 +1,32 @@
+# CalorAI Logging Agent — pinned dependencies (tested on Python 3.13, 2026-09).
+# Regenerate the lock with:  pip install -r requirements.in && pip freeze > requirements.txt
+
+# --- Agent framework ---
+langgraph==1.2.11
+langchain-core==1.6.1
+langgraph-checkpoint-sqlite==3.1.1
+langgraph-prebuilt==1.1.0
+
+# --- Model providers (only the one you use needs a key) ---
+langchain-openai==1.6.0            # OpenAI + OpenAI-compatible endpoints (Sarvam, Groq)
+langchain-anthropic==1.7.0         # optional
+langchain-google-genai==4.4.0      # optional
+
+# --- Observability ---
+langsmith==0.12.1
+
+# --- Structured output / config ---
+pydantic==2.13.5
+python-dotenv==1.2.3
+
+# --- CLI ---
+rich==15.0.0
+
+# --- Eval harness ---
+PyYAML==6.0.3
+
+# --- Images ---
+pillow==12.3.0
+
+# --- Dev / tests ---
+pytest==9.1.1
