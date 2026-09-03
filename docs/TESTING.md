@@ -3,10 +3,17 @@
 ## Setup (once)
 
 ```bash
+cd /path/to/CalorAI                 # the repo root (where cli.py is)
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env        # paste your key, keep MODEL_PROFILE=sarvam
+cp .env.example .env                # paste your key, keep MODEL_PROFILE=sarvam
 python cli.py
+```
+
+Every command below assumes you are in the repo root with the venv activated:
+
+```bash
+cd /path/to/CalorAI && source .venv/bin/activate
 ```
 
 First run asks your name and prints your `usr_...` id. Resume later with
@@ -75,6 +82,7 @@ For step 4, first send `had rajma and rice for lunch yesterday`, then
 ## Automated checks
 
 ```bash
+cd /path/to/CalorAI && source .venv/bin/activate
 pytest -q                    # 69 unit tests
 python evals/run.py          # 22 scenario evals
 python benchmarks/latency.py # p50/p95 for both paths
