@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from langchain_core.messages import AIMessage, HumanMessage
 
 from calorai.agent.context import TurnContext, new_turn_id, reset_context, set_context
+from calorai.agent.formatting import clean_reply, strip_markdown_chunk
 from calorai.agent.graph import build_app
 from calorai.agent.memory import schedule_reflection
 
@@ -62,7 +63,8 @@ def run_turn(
         reply = "(no reply)"
         for message in reversed(result["messages"]):
             if isinstance(message, AIMessage) and message.content and not message.tool_calls:
-                reply = message.content if isinstance(message.content, str) else str(message.content)
+                raw = message.content if isinstance(message.content, str) else str(message.content)
+                reply = clean_reply(raw)
                 break
         schedule_reflection(user_id, ctx.turn_id, user_text, reply)
         return reply
@@ -102,19 +104,19 @@ def stream_turn(
             text = chunk.content if isinstance(chunk.content, str) else ""
             if text:
                 pending.append(text)
-                yield text
+                yield strip_markdown_chunk(text)
 
-        reply = "".join(pending)
-        if not reply:
+        raw = "".join(pending)
+        if not raw:
             # Nothing streamed (e.g. the provider returned the final message whole).
             # Read it from the checkpointed state rather than re-running the turn.
             snapshot = app.get_state(config)
             for message in reversed(snapshot.values.get("messages", [])):
                 if isinstance(message, AIMessage) and message.content and not message.tool_calls:
-                    reply = message.content if isinstance(message.content, str) else str(message.content)
-                    yield reply
+                    raw = message.content if isinstance(message.content, str) else str(message.content)
+                    yield clean_reply(raw)
                     break
 
-        schedule_reflection(user_id, ctx.turn_id, user_text, reply)
+        schedule_reflection(user_id, ctx.turn_id, user_text, clean_reply(raw))
     finally:
         reset_context(token)

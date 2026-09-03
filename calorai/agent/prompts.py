@@ -75,7 +75,10 @@ PHOTOS
   call. Never log the photo and the caption as two separate meals.
 
 OUTPUT
-- Plain chat text. No markdown tables or bullet lists unless asked.
+- Plain text, the way you'd type in a messaging app. Absolutely no markdown:
+  no **bold**, no *italics*, no # headings, no bullet or numbered lists, no
+  tables, no backticks. Just sentences.
+- One or two sentences is usually enough.
 - If you couldn't estimate calories for a food, say so plainly.
 """
 
