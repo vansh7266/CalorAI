@@ -19,9 +19,13 @@ _EXTRA_BLANKS = re.compile(r"\n{3,}")
 
 
 def clean_reply(text: str) -> str:
-    """Strip markdown formatting from a complete reply."""
+    """Strip markdown formatting (and any leaked tool-call markup) from a reply."""
     if not text:
         return text
+    from calorai.agent.recovery import looks_like_leaked_tool_call, strip_leaked_markup
+
+    if looks_like_leaked_tool_call(text):
+        text = strip_leaked_markup(text)
     text = _BOLD.sub(lambda m: m.group(1) or m.group(2) or "", text)
     text = _ITALIC.sub(lambda m: m.group(1) or m.group(2) or "", text)
     text = _HEADING.sub("", text)

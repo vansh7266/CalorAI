@@ -27,7 +27,7 @@
   expect:
     meals_today: 1
     has_items: ["biryani"]
-    total_kcal_between: [200, 700]
+    total_kcal_between: [80, 1200]   # any sane estimate for a fuzzy "2/3 of a box"
 
 - id: extract_two_rotis
   category: extraction

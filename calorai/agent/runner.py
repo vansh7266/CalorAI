@@ -16,6 +16,7 @@ from calorai.agent.context import TurnContext, new_turn_id, reset_context, set_c
 from calorai.agent.formatting import clean_reply, strip_markdown_chunk
 from calorai.agent.graph import build_app
 from calorai.agent.memory import schedule_reflection
+from calorai.agent.recovery import looks_like_leaked_tool_call
 
 
 def _initial_state(user_text: str, *, user_id: str, turn_id: str, timezone_name: str, image_path: str | None) -> dict:
@@ -96,23 +97,43 @@ def stream_turn(
             user_text, user_id=user_id, turn_id=ctx.turn_id, timezone_name=timezone_name, image_path=image_path
         )
 
-        pending: list[str] = []
+        buffer = ""       # not yet yielded - lets us detect a leaked tool call early
+        streamed = ""     # what the user has actually seen
+        flushing = False  # once true, this message is confirmed clean; pass chunks straight through
         try:
             for chunk, meta in app.stream(state, config, stream_mode="messages"):
                 if meta.get("langgraph_node") != "agent":
                     continue
                 if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
-                    pending.clear()  # this agent turn is a tool call, not the answer
+                    buffer, streamed, flushing = "", "", False  # tool-call turn, not the answer
                     continue
                 text = chunk.content if isinstance(chunk.content, str) else ""
-                if text:
-                    pending.append(text)
-                    yield strip_markdown_chunk(text)
+                if not text:
+                    continue
 
-            raw = "".join(pending)
+                if flushing:
+                    streamed += text
+                    yield strip_markdown_chunk(text)
+                    continue
+
+                buffer += text
+                if looks_like_leaked_tool_call(buffer):
+                    buffer = ""  # the agent node will recover it; stream nothing here
+                    continue
+                if len(buffer) > 40:
+                    streamed += buffer
+                    yield strip_markdown_chunk(buffer)
+                    buffer, flushing = "", True
+
+            if buffer and not looks_like_leaked_tool_call(buffer):
+                streamed += buffer
+                yield strip_markdown_chunk(buffer)
+
+            raw = streamed
             if not raw:
-                # Nothing streamed (provider returned the final message whole).
-                # Read it from the checkpointed state rather than re-running the turn.
+                # Nothing streamed (provider returned the final message whole, or the
+                # only agent output was a recovered/leaked tool call). Read the final
+                # reply from the checkpointed state rather than re-running the turn.
                 snapshot = app.get_state(config)
                 for message in reversed(snapshot.values.get("messages", [])):
                     if isinstance(message, AIMessage) and message.content and not message.tool_calls:
@@ -120,9 +141,9 @@ def stream_turn(
                         yield clean_reply(raw)
                         break
         except Exception:
-            if not pending:
+            if not streamed:
                 yield "Something went wrong on my end - your logged meals are safe. Please try again."
-            raw = "".join(pending)
+            raw = streamed
 
         schedule_reflection(user_id, ctx.turn_id, user_text, clean_reply(raw))
     finally:

@@ -17,6 +17,7 @@ survives a restart and each user's thread is isolated.
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 from functools import lru_cache
 
@@ -28,6 +29,7 @@ from langgraph.prebuilt import ToolNode
 from calorai.agent.context import get_context
 from calorai.agent.memory import MEMORY_TOOLS, render_profile_card
 from calorai.agent.prompts import build_system_prompt
+from calorai.agent.recovery import looks_like_leaked_tool_call, recover_tool_calls, strip_leaked_markup
 from calorai.agent.state import AgentState
 from calorai.agent.tools import LOGGING_TOOLS
 from calorai.config import DB_PATH, ensure_data_dir, get_settings
@@ -121,7 +123,7 @@ def _agent(state: AgentState) -> dict:
 
     messages = [SystemMessage(content=system), *state["messages"]]
     try:
-        return {"messages": [model.invoke(messages)]}
+        response = model.invoke(messages)
     except Exception:
         # Model/API failure - keep the graph (and the conversation) alive.
         return {
@@ -132,6 +134,23 @@ def _agent(state: AgentState) -> dict:
                 )
             ]
         }
+
+    text = response.content if isinstance(response.content, str) else ""
+
+    # GLM-5.2 quirk 1: a tool call written into the message text instead of
+    # returned structured. Parse it back so the tool actually runs.
+    if not response.tool_calls and looks_like_leaked_tool_call(text):
+        recovered = recover_tool_calls(text)
+        if recovered:
+            return {"messages": [AIMessage(content=strip_leaked_markup(text), tool_calls=recovered)]}
+
+    # GLM-5.2 quirk 2: a structured tool call with a null id, which the tool node
+    # cannot build a ToolMessage for. Give every call a real id.
+    if response.tool_calls and any(not tc.get("id") for tc in response.tool_calls):
+        fixed = [{**tc, "id": tc.get("id") or f"call_{secrets.token_hex(4)}"} for tc in response.tool_calls]
+        return {"messages": [AIMessage(content=response.content, tool_calls=fixed)]}
+
+    return {"messages": [response]}
 
 
 def _route_after_agent(state: AgentState) -> str:
