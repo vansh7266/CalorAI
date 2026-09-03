@@ -83,3 +83,40 @@ def test_resolve_many_mixed(monkeypatch):
     )
     out = resolver.resolve_many([("roti", "piece"), ("chai", "cup"), ("weird thing", "bowl")])
     assert [e.source for e in out] == ["seed", "seed", "model"]
+
+
+# --- dimensional correctness: a per-portion seed must not answer a weight/volume request ---
+
+@pytest.mark.parametrize("unit", ["gram", "g", "grams", "ml", "kg", "oz", "tbsp"])
+def test_weight_or_volume_request_bypasses_incompatible_seed(monkeypatch, unit):
+    seen = {}
+
+    def fake_estimate(name, unit_hint):
+        seen["unit_hint"] = unit_hint
+        return NutritionEstimate(name, unit_hint or "serving", 1.3, 0.03, 0.28, 0.003, "model", 0.6)
+
+    monkeypatch.setattr(resolver, "_model_estimate", fake_estimate)
+    est = resolver.resolve("rice", unit)
+    # rice IS seeded (per cup/bowl) but the seed can't answer a per-gram question
+    assert est.source == "model"
+    assert seen["unit_hint"] == unit
+    assert est.kcal_per_unit < 50  # a sane per-gram/per-ml number, not a per-bowl one
+
+
+def test_portion_unit_still_hits_seed():
+    for unit in ("piece", "serving", "plate", "bowl", "cup"):
+        assert resolver.resolve("boiled egg", unit).source == "seed"
+
+
+def test_serving_unit_hits_seed():
+    est = resolver.resolve("roti", "serving")
+    assert est.source == "seed" and est.kcal_per_unit == 105
+
+
+def test_macro_guess_rejects_nonfinite_and_absurd():
+    from calorai.nutrition.resolver import _MacroGuess
+
+    with pytest.raises(Exception):
+        _MacroGuess(unit="cup", kcal=float("inf"), protein_g=0, carbs_g=0, fat_g=0)
+    with pytest.raises(Exception):
+        _MacroGuess(unit="cup", kcal=999_999_999, protein_g=0, carbs_g=0, fat_g=0)

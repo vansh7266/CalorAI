@@ -27,6 +27,7 @@ class AgentState(TypedDict, total=False):
     today_totals: dict | None
     last_meal: dict | None   # {"id", "description", "items": [{"name", "quantity"}]}
     vision_result: dict | None  # extracted items + confidence (Phase 3)
+    context_degraded: list[str] | None  # parts of the context that failed to load this turn
 
     # Control.
     awaiting_user: bool      # the agent asked a question and is waiting

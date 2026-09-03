@@ -115,10 +115,20 @@ def build_system_prompt(
     today_totals: dict | None = None,
     last_meal: dict | None = None,
     vision_result: dict | None = None,
+    context_degraded: list[str] | None = None,
 ) -> str:
     blocks = [_INSTRUCTIONS]
 
     context_lines: list[str] = []
+    if context_degraded:
+        context_lines.append(
+            "HEADS UP: some of your context failed to load this turn ("
+            + ", ".join(context_degraded)
+            + "). Do not state exact daily totals or confirm a correction's effect as "
+            "fact. Tell the user you're having trouble reading their saved data right "
+            "now and ask them to try again in a moment. You may still log what they "
+            "tell you."
+        )
     if memory_card.strip():
         context_lines.append("What you know about this user:\n" + memory_card.strip())
     if today_totals:

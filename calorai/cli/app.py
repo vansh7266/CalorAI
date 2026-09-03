@@ -13,6 +13,7 @@ import os
 import sys
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 
 from calorai.cli.commands import dispatch
@@ -150,11 +151,11 @@ def main(argv: list[str] | None = None) -> int:
     if not one_shot:
         _banner(console)
 
-    user = resolve_user(console, args.user)
+    user = resolve_user(console, args.user, non_interactive=one_shot)
 
     if one_shot:
         if args.image and not os.path.isfile(os.path.expanduser(args.image)):
-            console.print(f"[red]no file at {args.image}[/red]")
+            console.print(f"[red]no file at {escape(args.image)}[/red]")
             return 1
         image = os.path.expanduser(args.image) if args.image else None
         ok = _agent_reply(console, user, args.message or "", image, stream=not args.no_stream)

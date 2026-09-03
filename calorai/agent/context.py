@@ -41,8 +41,14 @@ class TurnContext:
         return self.local_now.date().isoformat()
 
     def resolve_date(self, reference: str | None) -> str:
+        """Like `resolve_date_or_none` but falls back to today for anything it
+        can't parse. Use this only where 'today' is a safe default."""
+        return self.resolve_date_or_none(reference) or self.local_date
+
+    def resolve_date_or_none(self, reference: str | None) -> str | None:
         """Turn 'today' / 'yesterday' / a weekday / an ISO date into YYYY-MM-DD
-        in the user's local timezone. Unknown input falls back to today."""
+        in the user's local timezone. Returns None for anything unrecognized or
+        impossible (e.g. '2026-99-99', 'last blursday') so the caller can ask."""
         if not reference:
             return self.local_date
         ref = reference.strip().lower()
@@ -57,13 +63,13 @@ class TurnContext:
                 date.fromisoformat(ref)  # reject impossible dates like 2026-99-99
                 return ref
             except ValueError:
-                return self.local_date
+                return None
         weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
         if ref in weekdays:
             today = self.local_now.date()
             delta = (today.weekday() - weekdays.index(ref)) % 7 or 7
             return (today - timedelta(days=delta)).isoformat()
-        return self.local_date
+        return None
 
     def meal_type_for_now(self) -> str:
         hour = self.local_now.hour
@@ -79,7 +85,7 @@ class TurnContext:
 def new_turn_id() -> str:
     import secrets
 
-    return f"turn_{secrets.token_hex(4)}"
+    return f"turn_{secrets.token_hex(8)}"
 
 
 def set_context(ctx: TurnContext):

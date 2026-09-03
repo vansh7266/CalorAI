@@ -16,13 +16,14 @@ Nothing here stores conversation history. Only durable facts and routines.
 from __future__ import annotations
 
 import atexit
+import math
 import os
 import re
 import threading
 from datetime import date, timedelta
 
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from calorai.agent.context import get_context
 from calorai.db import repositories as repo
@@ -84,8 +85,23 @@ def _routine_suggestion(user_id: str) -> str | None:
 
 class RoutineItem(BaseModel):
     name: str
-    quantity: float = 1.0
+    quantity: float = Field(default=1.0, gt=0, le=1000)
     unit: str = "serving"
+
+    @field_validator("quantity")
+    @classmethod
+    def _finite_quantity(cls, v: float) -> float:
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("quantity must be a positive finite number")
+        return float(v)
+
+    @field_validator("name", "unit")
+    @classmethod
+    def _nonblank(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("must not be blank")
+        return v
 
 
 def _derive_key(kind: str, content: str, meal_type: str | None) -> str:

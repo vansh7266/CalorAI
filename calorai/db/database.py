@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from calorai.config import DB_PATH, ensure_data_dir
+from calorai.db.migrations import CURRENT_VERSION, apply_migrations
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -29,13 +30,18 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: Path | None = None) -> None:
-    """Create the schema if it is not there yet. Safe to call repeatedly."""
+    """Bring the database up to date: run migrations for an existing DB, then
+    apply the current schema (CREATE ... IF NOT EXISTS). Safe to call repeatedly."""
     global _schema_applied
     path = db_path or DB_PATH
     ensure_data_dir()
+    path.parent.mkdir(parents=True, exist_ok=True)
     conn = _connect(path)
     try:
+        apply_migrations(conn)
         conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        if conn.execute("PRAGMA user_version").fetchone()[0] < CURRENT_VERSION:
+            conn.execute(f"PRAGMA user_version = {CURRENT_VERSION}")
     finally:
         conn.close()
     if db_path is None:

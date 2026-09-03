@@ -57,7 +57,20 @@ def test_load_context_survives_db_failure(monkeypatch):
         out = _load_context({})
     finally:
         ctxmod.reset_context(token)
-    assert out == {"today_totals": None, "last_meal": None, "memory_card": ""}
+    # the turn survives (no exception) ...
+    assert out["today_totals"] is None and out["last_meal"] is None
+    # ... but the failure is surfaced, not swallowed, so the agent can hedge
+    assert out["context_degraded"] and "today's totals" in out["context_degraded"]
+
+
+def test_load_context_clean_when_healthy(monkeypatch):
+    user = repo.create_user("t", "UTC")
+    token = ctxmod.set_context(_ctx(user.id))
+    try:
+        out = _load_context({})
+    finally:
+        ctxmod.reset_context(token)
+    assert out["context_degraded"] is None
 
 
 def test_run_turn_never_raises(monkeypatch):

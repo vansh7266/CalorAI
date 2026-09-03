@@ -14,6 +14,7 @@ import os
 from datetime import date
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.prompt import Prompt
 
@@ -57,7 +58,7 @@ def _greet_returning(console: Console, user: User) -> None:
     else:
         line = "Nothing logged yet today."
     console.print(
-        Panel(f"Welcome back, [bold]{user.name}[/bold].\n{line}", border_style="green", title="CalorAI")
+        Panel(f"Welcome back, [bold]{escape(user.name)}[/bold].\n{line}", border_style="green", title="CalorAI")
     )
 
 
@@ -78,24 +79,33 @@ def _first_run(console: Console) -> User:
             remember_user(existing.id)
             _greet_returning(console, existing)
             return existing
-        console.print(f"[yellow]No user with id '{answer}'. Creating a new one.[/yellow]")
+        console.print(f"[yellow]No user with id '{escape(answer)}'. Creating a new one.[/yellow]")
         answer = "guest"
 
     name = answer or "guest"
     user = repo.create_user(name, detect_timezone())
     console.print(
         Panel(
-            f"Nice to meet you, [bold]{name}[/bold].\n"
+            f"Nice to meet you, [bold]{escape(name)}[/bold].\n"
             f"Your CalorAI id is [bold cyan]{user.id}[/bold cyan] - save it to resume on another session\n"
-            f"with [dim]python cli.py --user {user.id}[/dim].",
+            f"with [dim]calorai --user {user.id}[/dim].",
             border_style="cyan",
         )
     )
     return user
 
 
-def resolve_user(console: Console, explicit_id: str | None = None) -> User:
-    """Return the active user, running first-run onboarding if needed."""
+def _guest_user(console: Console) -> User:
+    """Create a user without prompting - for one-shot / non-interactive runs on a
+    fresh data directory (e.g. the eval harness)."""
+    user = repo.create_user("guest", detect_timezone())
+    console.print(f"[dim]new CalorAI id {user.id} (pass --user {user.id} to resume)[/dim]")
+    return user
+
+
+def resolve_user(console: Console, explicit_id: str | None = None, *, non_interactive: bool = False) -> User:
+    """Return the active user, running first-run onboarding if needed. With
+    `non_interactive`, a first run creates a guest user instead of prompting."""
     requested = explicit_id or os.getenv("CALORAI_USER")
     if requested:
         user = repo.get_user(requested.strip())
@@ -103,15 +113,16 @@ def resolve_user(console: Console, explicit_id: str | None = None) -> User:
             remember_user(user.id)
             _greet_returning(console, user)
             return user
-        console.print(f"[yellow]No user found with id '{requested}'. Starting fresh.[/yellow]")
+        console.print(f"[yellow]No user found with id '{escape(requested)}'. Starting fresh.[/yellow]")
 
     last = _read_last_user_id()
     if last and not requested:
         user = repo.get_user(last)
         if user:
-            _greet_returning(console, user)
+            if not non_interactive:
+                _greet_returning(console, user)
             return user
 
-    user = _first_run(console)
+    user = _guest_user(console) if non_interactive else _first_run(console)
     remember_user(user.id)
     return user

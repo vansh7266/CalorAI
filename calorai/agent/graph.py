@@ -17,6 +17,7 @@ survives a restart and each user's thread is isolated.
 
 from __future__ import annotations
 
+import logging
 import secrets
 import sqlite3
 from functools import lru_cache
@@ -37,6 +38,8 @@ from calorai.db import repositories as repo
 from calorai.models.gateway import get_text_model
 from calorai.vision.extract import extract_food_from_image
 
+logger = logging.getLogger("calorai.graph")
+
 AGENT_TOOLS = LOGGING_TOOLS + MEMORY_TOOLS
 
 
@@ -54,10 +57,12 @@ def _ingest(state: AgentState) -> dict:
 
 
 def _load_context(state: AgentState) -> dict:
-    """Best-effort context load. A DB hiccup here should not kill the turn - the
-    agent can still answer, just with less context."""
+    """Best-effort context load. A DB hiccup here should not kill the turn - but
+    it must not pass silently either: each failure is logged, and the parts that
+    failed are recorded so the agent can hedge instead of stating wrong totals."""
     ctx = get_context()
-    out: dict = {"today_totals": None, "last_meal": None, "memory_card": ""}
+    out: dict = {"today_totals": None, "last_meal": None, "memory_card": "", "context_degraded": None}
+    degraded: list[str] = []
 
     try:
         totals = repo.daily_totals(ctx.user_id, ctx.local_date).rounded()
@@ -69,7 +74,8 @@ def _load_context(state: AgentState) -> dict:
             "meal_count": totals.meal_count,
         }
     except Exception:
-        pass
+        logger.warning("load_context: daily totals failed for user %s", ctx.user_id, exc_info=True)
+        degraded.append("today's totals")
 
     try:
         recent = repo.get_recent_meals(ctx.user_id, limit=1)
@@ -82,13 +88,17 @@ def _load_context(state: AgentState) -> dict:
                 "items": [{"name": i.name, "quantity": i.quantity} for i in m.items],
             }
     except Exception:
-        pass
+        logger.warning("load_context: recent meal failed for user %s", ctx.user_id, exc_info=True)
+        degraded.append("your recent meals")
 
     try:
         out["memory_card"] = render_profile_card(ctx.user_id)
     except Exception:
-        pass
+        logger.warning("load_context: profile card failed for user %s", ctx.user_id, exc_info=True)
+        degraded.append("your saved profile")
 
+    if degraded:
+        out["context_degraded"] = degraded
     return out
 
 
@@ -136,6 +146,7 @@ def _agent(state: AgentState) -> dict:
         today_totals=state.get("today_totals"),
         last_meal=state.get("last_meal"),
         vision_result=state.get("vision_result"),
+        context_degraded=state.get("context_degraded"),
     )
 
     model = get_text_model(streaming=True)

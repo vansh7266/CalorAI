@@ -45,6 +45,7 @@ def _initial_state(user_text: str, *, user_id: str, turn_id: str, timezone_name:
         "user_text": user_text,
         "image_path": image_path,
         "vision_result": None,
+        "context_degraded": None,
     }
 
 

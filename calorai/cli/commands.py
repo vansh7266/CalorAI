@@ -141,6 +141,6 @@ def dispatch(console: Console, user: User, line: str) -> bool:
     arg = parts[1] if len(parts) > 1 else ""
     handler = COMMANDS.get(name)
     if handler is None:
-        console.print(f"[yellow]unknown command '/{name}'. try /help[/yellow]")
+        console.print(f"[yellow]unknown command '/{escape(name)}'. try /help[/yellow]")
         return True
     return handler(console, user, arg)

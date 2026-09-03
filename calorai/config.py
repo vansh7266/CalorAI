@@ -13,6 +13,7 @@ and a stale default would only fail in a confusing way later.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -27,14 +28,40 @@ load_dotenv()
 PACKAGE_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = PACKAGE_ROOT.parent
 
-DATA_DIR = Path(os.getenv("CALORAI_DATA_DIR", PROJECT_ROOT / "data")).expanduser()
-DB_PATH = Path(os.getenv("CALORAI_DB_PATH", DATA_DIR / "calorai.db")).expanduser()
+
+def _os_user_data_dir() -> Path:
+    """A per-user, writable data directory for the current OS."""
+    if sys.platform == "win32":
+        base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
+        return Path(base) / "CalorAI" if base else Path.home() / "AppData" / "Local" / "CalorAI"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "CalorAI"
+    xdg = os.getenv("XDG_DATA_HOME")
+    return Path(xdg) / "calorai" if xdg else Path.home() / ".local" / "share" / "calorai"
+
+
+def _default_data_dir() -> Path:
+    """Where to keep the database and session file when nothing is configured.
+
+    A source checkout (the repo, the eval harness, a clean clone) keeps its data
+    beside the code under ./data so everything stays self-contained. An installed
+    package must not write into site-packages - which may be read-only and is the
+    wrong place for user data - so it falls back to the OS user-data directory.
+    """
+    if (PROJECT_ROOT / "pyproject.toml").is_file():
+        return PROJECT_ROOT / "data"
+    return _os_user_data_dir()
+
+
+DATA_DIR = Path(os.getenv("CALORAI_DATA_DIR") or _default_data_dir()).expanduser()
+DB_PATH = Path(os.getenv("CALORAI_DB_PATH") or (DATA_DIR / "calorai.db")).expanduser()
 SESSION_FILE = DATA_DIR / ".session"  # remembers the last-used user id
 
 
 def ensure_data_dir() -> None:
-    """Create the local data directory if it does not exist yet."""
+    """Create the data directory (and the DB's parent, if set elsewhere)."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 # --- Providers ---

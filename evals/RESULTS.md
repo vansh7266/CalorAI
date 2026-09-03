@@ -1,9 +1,16 @@
 # Eval results
 
-Run: `python evals/run.py` — 22 cases, GLM-5.2 (text) + Gemma 4 (vision), fresh SQLite per case,
+Run: `python evals/run.py` — GLM-5.2 (text) + Gemma 4 (vision), fresh SQLite per case,
 reflection run inline for determinism.
 
-## Latest run: 22 / 22 passed
+> STALE — regenerate before submission. The suite is now **23 cases** (added a
+> `sustained` long-session case and a stronger `caption_vs_control` check on the
+> caption case) and the harness was fixed after this table was written. The
+> numbers below are from the old 22-case run and are kept only as a reference
+> point; the final `evals/RESULTS.md` must be a fresh run tied to the submission
+> commit.
+
+## Last recorded run: 22 / 22 passed (pre-fix suite)
 
 | category | cases | result |
 |---|---|---|

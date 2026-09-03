@@ -142,21 +142,27 @@ def _match_item(meal: Meal, name: str) -> MealItem | str | None:
     return None
 
 
-def _owned_meal(meal_id: str) -> Meal | None:
+def _owned_active_meal(meal_id: str) -> Meal | str | None:
+    """The user's meal, or 'DELETED' if it exists but was removed, or None."""
     ctx = get_context()
     meal = repo.get_meal(meal_id)
     if meal is None or meal.user_id != ctx.user_id:
         return None
+    if meal.status == "deleted":
+        return "DELETED"
     return meal
 
 
-def _valid_meal_type(value: str | None) -> str | None:
-    """Normalize to one of the known meal types, or None (caller infers/asks)."""
-    if not value:
+_MEAL_TYPE_ALIASES = {"brunch": "breakfast", "supper": "dinner", "tea": "snack", "dessert": "snack"}
+
+
+def _normalize_meal_type(value: str | None) -> str | None:
+    """Map to a known meal type. Returns None for blank AND for unrecognized -
+    callers must tell those two apart (blank -> infer, unrecognized -> error)."""
+    if not value or not value.strip():
         return None
     v = value.strip().lower()
-    aliases = {"brunch": "breakfast", "supper": "dinner", "tea": "snack", "dessert": "snack"}
-    v = aliases.get(v, v)
+    v = _MEAL_TYPE_ALIASES.get(v, v)
     return v if v in MEAL_TYPES else None
 
 
@@ -185,8 +191,18 @@ def log_meal(
         if not items:
             return {"error": "no items to log"}
         ctx = get_context()
-        meal_date = ctx.resolve_date(eaten_when)
-        mtype = _valid_meal_type(meal_type) or ctx.meal_type_for_now()
+
+        meal_date = ctx.resolve_date_or_none(eaten_when)
+        if meal_date is None:
+            return {"error": f"I couldn't work out when '{eaten_when}' was - which day did you mean?"}
+
+        if meal_type is not None and meal_type.strip():
+            mtype = _normalize_meal_type(meal_type)
+            if mtype is None:
+                return {"error": f"meal type should be one of {', '.join(MEAL_TYPES)}"}
+        else:
+            mtype = ctx.meal_type_for_now()
+
         rows, unresolved = _resolved_rows(items)
         meal = repo.insert_meal(
             user_id=ctx.user_id,
@@ -229,9 +245,11 @@ def update_meal(
     """
     try:
         ctx = get_context()
-        meal = _owned_meal(meal_id)
+        meal = _owned_active_meal(meal_id)
         if meal is None:
             return {"error": "no meal with that id"}
+        if meal == "DELETED":
+            return {"error": "that meal was deleted - log it again if you did eat it"}
 
         # 1. validate every requested change first - nothing is written yet
         ops: list[dict] = []
@@ -271,14 +289,16 @@ def update_meal(
             changed.append(f"added {add_item.name}")
 
         if meal_type is not None:
-            mt = _valid_meal_type(meal_type)
+            mt = _normalize_meal_type(meal_type)
             if mt is None:
                 return {"error": f"meal type must be one of {', '.join(MEAL_TYPES)}"}
             ops.append({"op": "set_field", "field": "meal_type", "value": mt})
             changed.append(f"meal_type -> {mt}")
 
         if eaten_when is not None:
-            new_date = ctx.resolve_date(eaten_when)
+            new_date = ctx.resolve_date_or_none(eaten_when)
+            if new_date is None:
+                return {"error": f"I couldn't work out when '{eaten_when}' was"}
             ops.append({"op": "set_field", "field": "meal_date", "value": new_date})
             ops.append({"op": "set_field", "field": "eaten_at", "value": _eaten_at_for(new_date)})
             changed.append(f"date -> {new_date}")
@@ -310,9 +330,9 @@ def delete_meal(meal_id: str) -> dict:
     To change part of a meal, use update_meal instead."""
     try:
         ctx = get_context()
-        meal = _owned_meal(meal_id)
-        if meal is None:
-            return {"error": f"no meal found with id {meal_id}"}
+        meal = repo.get_meal(meal_id)
+        if meal is None or meal.user_id != ctx.user_id:
+            return {"error": "no meal with that id"}
         ok = repo.soft_delete_meal(meal_id, turn_id=ctx.turn_id)
         return {
             "deleted": ok,

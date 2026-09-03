@@ -37,6 +37,13 @@ def _fresh_db(tmp_dir: Path, case_id: str) -> None:
     database.init_db(db_path)
 
 
+def _total_logged_quantity(user_id: str) -> float:
+    from datetime import datetime, timezone
+
+    day = datetime.now(timezone.utc).date().isoformat()
+    return sum(i.quantity for m in repo.get_meals_for_date(user_id, day) for i in m.items)
+
+
 def _run_case(case: dict) -> tuple[bool, list, float, str]:
     from calorai.agent.runner import run_turn
 
@@ -54,6 +61,24 @@ def _run_case(case: dict) -> tuple[bool, list, float, str]:
     elapsed = time.time() - start
 
     result = grade(case["expect"], user, reply)
+
+    # Stronger caption check: run the SAME image with no caption on a fresh DB and
+    # confirm the caption actually shrank the logged portions, rather than just
+    # trusting that some item happened to come back below one unit.
+    spec = case["expect"].get("caption_vs_control")
+    if spec and image_path:
+        control = repo.create_user("eval-control", "UTC")
+        run_turn("", user_id=control.id, thread_id=control.id, timezone_name="UTC", image_path=image_path)
+        treated_qty = _total_logged_quantity(user.id)
+        control_qty = _total_logged_quantity(control.id)
+        max_ratio = spec.get("max_ratio", 0.85)
+        ok = control_qty > 0 and treated_qty <= control_qty * max_ratio
+        result.add(
+            f"caption reduced total portions to <= {max_ratio:.0%} of the no-caption run",
+            ok,
+            f"with caption {treated_qty:.2f} vs without {control_qty:.2f}",
+        )
+
     return result.passed, result.checks, elapsed, reply
 
 

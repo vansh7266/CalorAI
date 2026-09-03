@@ -238,3 +238,5 @@
     min_items: 1
     meal_source: "image+text"
     caption_reduced_portions: true   # something on the plate was logged at < 1 unit
+    caption_vs_control:              # ...and it's the caption doing it: same photo,
+      max_ratio: 0.85               # no caption logs strictly more total quantity

@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import base64
 import io
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from calorai.models.gateway import as_structured, get_vision_model
 
@@ -28,9 +29,23 @@ _ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 
 class VisionItem(BaseModel):
     name: str = Field(description="the food, as specific as you can be")
-    quantity: float = Field(default=1.0, description="estimated number of units on the plate")
+    quantity: float = Field(default=1.0, gt=0, le=100, description="estimated number of units on the plate")
     unit: str = Field(default="serving", description="piece, cup, bowl, slice, glass, plate...")
-    confidence: float = Field(ge=0.0, le=1.0, description="0-1: how sure you are this item is what/how-much you say")
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0, description="0-1: how sure you are")
+
+    @field_validator("quantity")
+    @classmethod
+    def _finite_q(cls, v: float) -> float:
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("quantity must be a positive finite number")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def _name(cls, v: str) -> str:
+        if not (v or "").strip():
+            raise ValueError("name must not be blank")
+        return v.strip()
 
 
 class _VisionOutput(BaseModel):

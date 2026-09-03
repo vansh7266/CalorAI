@@ -127,16 +127,51 @@ def test_description_regenerated_on_correction(env):
 
 # --- meal_type + date validation -----------------------------------------
 
-def test_bad_meal_type_rejected(env):
+def test_bad_meal_type_rejected_on_update(env):
     res = log_meal.invoke({"items": [{"name": "roti", "quantity": 1, "unit": "piece"}]})
     out = update_meal.invoke({"meal_id": res["meal_id"], "meal_type": "midnight feast"})
     assert "error" in out
 
 
-def test_impossible_iso_date_not_stored(env):
-    out = log_meal.invoke({"items": [{"name": "roti", "quantity": 1, "unit": "piece"}], "eaten_when": "2026-99-99"})
-    assert out.get("logged") is True
-    assert out["meal_date"] == "2026-09-03"  # fell back to today, not the junk date
+def test_bad_meal_type_rejected_on_new_log(env):
+    out = log_meal.invoke(
+        {"items": [{"name": "roti", "quantity": 1, "unit": "piece"}], "meal_type": "midnight feast"}
+    )
+    assert "error" in out
+    assert get_daily_totals.invoke({})["totals"]["kcal"] == 0  # nothing was logged as "lunch"
+
+
+def test_blank_meal_type_still_inferred(env):
+    out = log_meal.invoke({"items": [{"name": "roti", "quantity": 1, "unit": "piece"}], "meal_type": ""})
+    assert out.get("logged") is True  # empty -> infer from time of day, not an error
+
+
+def test_impossible_iso_date_is_rejected(env):
+    out = log_meal.invoke(
+        {"items": [{"name": "roti", "quantity": 1, "unit": "piece"}], "eaten_when": "2026-99-99"}
+    )
+    assert "error" in out  # ask the user, don't silently log it today
+    assert get_daily_totals.invoke({})["totals"]["kcal"] == 0
+
+
+def test_unknown_date_phrase_is_rejected(env):
+    out = log_meal.invoke(
+        {"items": [{"name": "roti", "quantity": 1, "unit": "piece"}], "eaten_when": "last blursday"}
+    )
+    assert "error" in out
+    assert get_daily_totals.invoke({})["totals"]["kcal"] == 0
+
+
+def test_update_of_deleted_meal_is_rejected(env):
+    res = log_meal.invoke({"items": [{"name": "roti", "quantity": 2, "unit": "piece"}]})
+    meal_id = res["meal_id"]
+    from calorai.agent.tools import delete_meal
+
+    delete_meal.invoke({"meal_id": meal_id})
+    out = update_meal.invoke({"meal_id": meal_id, "item_name": "roti", "new_quantity": 3})
+    assert "error" in out
+    assert repo.get_meal(meal_id).status == "deleted"
+    assert get_daily_totals.invoke({})["totals"]["kcal"] == 0
 
 
 # --- image source provenance --------------------------------------------

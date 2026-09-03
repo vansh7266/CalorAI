@@ -39,12 +39,12 @@ CREATE TABLE IF NOT EXISTS meal_items (
     meal_id            TEXT NOT NULL REFERENCES meals (id) ON DELETE CASCADE,
     position           INTEGER NOT NULL DEFAULT 0, -- order the items were logged in
     name               TEXT NOT NULL CHECK (length(trim(name)) > 0),
-    quantity           REAL NOT NULL DEFAULT 1 CHECK (quantity > 0),
+    quantity           REAL NOT NULL DEFAULT 1 CHECK (quantity > 0 AND quantity < 1e6),
     unit               TEXT NOT NULL DEFAULT 'serving',
-    kcal_per_unit      REAL NOT NULL DEFAULT 0 CHECK (kcal_per_unit >= 0),
-    protein_g_per_unit REAL NOT NULL DEFAULT 0 CHECK (protein_g_per_unit >= 0),
-    carbs_g_per_unit   REAL NOT NULL DEFAULT 0 CHECK (carbs_g_per_unit >= 0),
-    fat_g_per_unit     REAL NOT NULL DEFAULT 0 CHECK (fat_g_per_unit >= 0),
+    kcal_per_unit      REAL NOT NULL DEFAULT 0 CHECK (kcal_per_unit >= 0 AND kcal_per_unit < 1e6),
+    protein_g_per_unit REAL NOT NULL DEFAULT 0 CHECK (protein_g_per_unit >= 0 AND protein_g_per_unit < 1e6),
+    carbs_g_per_unit   REAL NOT NULL DEFAULT 0 CHECK (carbs_g_per_unit >= 0 AND carbs_g_per_unit < 1e6),
+    fat_g_per_unit     REAL NOT NULL DEFAULT 0 CHECK (fat_g_per_unit >= 0 AND fat_g_per_unit < 1e6),
     confidence         REAL NOT NULL DEFAULT 1.0 CHECK (confidence >= 0 AND confidence <= 1),
     nutrition_source   TEXT NOT NULL DEFAULT 'model' CHECK (nutrition_source IN ('seed', 'cache', 'model', 'failed')),
     created_at         TEXT NOT NULL
@@ -97,10 +97,10 @@ CREATE INDEX IF NOT EXISTS idx_edits_meal ON meal_edits (meal_id);
 CREATE TABLE IF NOT EXISTS nutrition_cache (
     name               TEXT NOT NULL,        -- normalized specific food name
     unit               TEXT NOT NULL DEFAULT 'serving', -- the unit the macros are per
-    kcal_per_unit      REAL NOT NULL CHECK (kcal_per_unit >= 0),
-    protein_g_per_unit REAL NOT NULL CHECK (protein_g_per_unit >= 0),
-    carbs_g_per_unit   REAL NOT NULL CHECK (carbs_g_per_unit >= 0),
-    fat_g_per_unit     REAL NOT NULL CHECK (fat_g_per_unit >= 0),
+    kcal_per_unit      REAL NOT NULL CHECK (kcal_per_unit >= 0 AND kcal_per_unit < 1e6),
+    protein_g_per_unit REAL NOT NULL CHECK (protein_g_per_unit >= 0 AND protein_g_per_unit < 1e6),
+    carbs_g_per_unit   REAL NOT NULL CHECK (carbs_g_per_unit >= 0 AND carbs_g_per_unit < 1e6),
+    fat_g_per_unit     REAL NOT NULL CHECK (fat_g_per_unit >= 0 AND fat_g_per_unit < 1e6),
     source             TEXT NOT NULL DEFAULT 'seed' CHECK (source IN ('seed', 'model')),
     created_at         TEXT NOT NULL,
     PRIMARY KEY (name, unit)

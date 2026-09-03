@@ -103,3 +103,26 @@ def test_resolve_user_explicit_unknown_id_falls_through(monkeypatch):
 def test_detect_timezone_env_override(monkeypatch):
     monkeypatch.setenv("CALORAI_TZ", "Asia/Kolkata")
     assert onboarding.detect_timezone() == "Asia/Kolkata"
+
+
+def test_resolve_user_non_interactive_never_prompts(monkeypatch):
+    # one-shot mode: prompting here would hang the eval harness / a piped call
+    def _boom(*a, **k):
+        raise AssertionError("resolve_user prompted in non-interactive mode")
+
+    monkeypatch.setattr("rich.prompt.Prompt.ask", staticmethod(_boom))
+    user = onboarding.resolve_user(_console(), None, non_interactive=True)
+    assert user.name == "guest" and user.id.startswith("usr_")
+    again = onboarding.resolve_user(_console(), None, non_interactive=True)
+    assert again.id == user.id  # resumes via the session file
+
+
+def test_rich_markup_in_name_is_escaped(monkeypatch):
+    monkeypatch.setattr("rich.prompt.Prompt.ask", staticmethod(lambda *a, **k: "[red]evil[/red]"))
+    con = _console()
+    user = onboarding.resolve_user(con, None)
+    assert user.name == "[red]evil[/red]"
+    # the literal brackets survive to the output instead of being parsed as a tag
+    again_con = _console()
+    onboarding.resolve_user(again_con, None)
+    assert "[red]evil[/red]" in again_con.export_text()

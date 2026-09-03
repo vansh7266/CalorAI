@@ -7,6 +7,7 @@ classes from `records.py`, never raw rows.
 from __future__ import annotations
 
 import json
+import math
 import secrets
 import sqlite3
 from datetime import datetime, timezone
@@ -14,9 +15,23 @@ from datetime import datetime, timezone
 from calorai.db.database import get_connection, transaction
 from calorai.db.records import DailyTotals, Meal, MealItem, MemoryRecord, User
 
+# Values at or above this are treated as malformed model/vision output, not real
+# food. Mirrors the CHECK bounds in schema.sql.
+_MAX_NUMERIC = 1e6
+
 
 def new_id(prefix: str) -> str:
-    return f"{prefix}_{secrets.token_hex(6)}"
+    return f"{prefix}_{secrets.token_hex(8)}"
+
+
+def _bounded(value: float, *, allow_zero: bool = True) -> float:
+    """Reject NaN / infinity / out-of-range numbers before they reach SQLite,
+    where a bare ``> 0`` CHECK would happily accept +infinity."""
+    v = float(value)
+    low_ok = v >= 0 if allow_zero else v > 0
+    if not math.isfinite(v) or not low_ok or v >= _MAX_NUMERIC:
+        raise ValueError("numeric value out of range")
+    return v
 
 
 def _utc_now() -> str:
@@ -101,13 +116,13 @@ def _insert_item(conn: sqlite3.Connection, meal_id: str, item: dict, now: str, p
             meal_id,
             position,
             item["name"],
-            float(item.get("quantity", 1)),
+            _bounded(item.get("quantity", 1), allow_zero=False),
             item.get("unit", "serving"),
-            float(item.get("kcal_per_unit", 0)),
-            float(item.get("protein_g_per_unit", 0)),
-            float(item.get("carbs_g_per_unit", 0)),
-            float(item.get("fat_g_per_unit", 0)),
-            float(item.get("confidence", 1.0)),
+            _bounded(item.get("kcal_per_unit", 0)),
+            _bounded(item.get("protein_g_per_unit", 0)),
+            _bounded(item.get("carbs_g_per_unit", 0)),
+            _bounded(item.get("fat_g_per_unit", 0)),
+            max(0.0, min(1.0, float(item.get("confidence", 1.0)))),
             item.get("nutrition_source", "model"),
             now,
         ),
@@ -285,8 +300,9 @@ def apply_meal_edits(meal_id: str, ops: list[dict], *, turn_id: str | None = Non
                 ).fetchone()
                 if not row:
                     raise ValueError("item not in meal")
-                conn.execute("UPDATE meal_items SET quantity = ? WHERE id = ?", (float(op["quantity"]), op["item_id"]))
-                _record_edit(conn, meal_id, f"item:{row['name']}:quantity", str(row["quantity"]), str(op["quantity"]), turn_id)
+                new_qty = _bounded(op["quantity"], allow_zero=False)
+                conn.execute("UPDATE meal_items SET quantity = ? WHERE id = ?", (new_qty, op["item_id"]))
+                _record_edit(conn, meal_id, f"item:{row['name']}:quantity", str(row["quantity"]), str(new_qty), turn_id)
             elif kind == "remove_item":
                 row = conn.execute(
                     "SELECT name FROM meal_items WHERE id = ? AND meal_id = ?", (op["item_id"], meal_id)
@@ -505,10 +521,10 @@ def put_cached_nutrition(name: str, macros: dict, *, source: str = "model") -> N
             (
                 name.strip().lower(),
                 str(macros.get("unit", "serving")).strip().lower(),
-                max(0.0, float(macros["kcal_per_unit"])),
-                max(0.0, float(macros["protein_g_per_unit"])),
-                max(0.0, float(macros["carbs_g_per_unit"])),
-                max(0.0, float(macros["fat_g_per_unit"])),
+                _bounded(macros["kcal_per_unit"]),
+                _bounded(macros["protein_g_per_unit"]),
+                _bounded(macros["carbs_g_per_unit"]),
+                _bounded(macros["fat_g_per_unit"]),
                 source,
                 _utc_now(),
             ),
