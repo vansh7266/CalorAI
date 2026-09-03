@@ -129,7 +129,12 @@ def _repl(console: Console, user: User, stream: bool) -> None:
             if line[1:].split(maxsplit=1)[0].lower() in ("img", "image", "photo"):
                 path, caption = _parse_img_command(line)
                 if path is None:
-                    console.print("[yellow]usage: /img <path> [caption]  (quote paths with spaces)[/yellow]")
+                    console.print(
+                        "usage: /img PATH  - add an optional caption after the path; "
+                        "quote paths that contain spaces",
+                        style="yellow",
+                        markup=False,
+                    )
                     continue
                 _agent_reply(console, user, caption, path, stream)
                 console.print()

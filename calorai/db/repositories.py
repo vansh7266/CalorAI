@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import secrets
 import sqlite3
 from datetime import datetime, timezone
@@ -402,6 +403,25 @@ def get_meal_edits(meal_id: str) -> list[dict]:
 
 # --- Memory ---
 
+_MEM_STOPWORDS = frozenset(
+    "a an the is are am was were be of for to and or my your i you it that this with "
+    "on at in as have has had do does day per about like".split()
+)
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if len(w) > 1 and w not in _MEM_STOPWORDS}
+
+
+def _same_fact(new_content: str, old_content: str) -> bool:
+    """True when two memory contents are about the same thing - a refinement
+    ("my usual" -> "my usual breakfast") rather than a genuinely new fact. Uses
+    token containment so a longer, more specific phrasing still matches."""
+    a, b = _content_tokens(new_content), _content_tokens(old_content)
+    if len(a) < 2 or len(b) < 2:
+        return False
+    return len(a & b) / min(len(a), len(b)) >= 0.7
+
 
 def upsert_memory(
     *,
@@ -414,10 +434,24 @@ def upsert_memory(
     learned_via: str = "stated",
     confidence: float = 1.0,
     source_turn_id: str | None = None,
+    consolidate: bool = False,
 ) -> MemoryRecord:
     """Write a memory. Any existing active row with the same (user, type, key) is
-    marked 'superseded' first, so history is preserved."""
+    marked 'superseded' first, so history is preserved.
+
+    With `consolidate` (used for routines / preferences, which users refine
+    across turns), any *other* active row of the same type that is about the same
+    fact is also superseded - so "my usual is toast" then "my usual breakfast is
+    toast and milk" leaves one row, not two. A vague inference never displaces
+    something the user actually stated; it's dropped instead.
+    """
     now = _utc_now()
+
+    if consolidate and learned_via == "inferred":
+        for existing in get_active_memory(user_id, types=[type]):
+            if existing.learned_via in ("stated", "confirmed") and _same_fact(content, existing.content):
+                return existing  # keep the stronger row, write nothing
+
     mem_id = new_id("mem")
     payload = json.dumps(structured_value) if structured_value is not None else None
     with transaction() as conn:
@@ -425,6 +459,16 @@ def upsert_memory(
             "UPDATE memory SET status = 'superseded', updated_at = ? WHERE user_id = ? AND type = ? AND key = ? AND status = 'active'",
             (now, user_id, type, key),
         )
+        if consolidate:
+            rows = conn.execute(
+                "SELECT id, content FROM memory WHERE user_id = ? AND type = ? AND status = 'active'",
+                (user_id, type),
+            ).fetchall()
+            for row in rows:
+                if _same_fact(content, row["content"]):
+                    conn.execute(
+                        "UPDATE memory SET status = 'superseded', updated_at = ? WHERE id = ?", (now, row["id"])
+                    )
         conn.execute(
             """INSERT INTO memory
                (id, user_id, type, key, content, structured_value, meal_type, status,

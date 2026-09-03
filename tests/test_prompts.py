@@ -36,3 +36,8 @@ def test_memory_card_render():
     text = build_system_prompt(memory_card="- vegetarian\n- protein target 140 g/day")
     assert "What you know about this user" in text
     assert "protein target 140 g/day" in text
+
+
+def test_user_name_render():
+    assert "The user's name is Vineet." in build_system_prompt(user_name="Vineet")
+    assert "The user's name is" not in build_system_prompt(user_name=None)

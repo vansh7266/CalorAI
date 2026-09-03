@@ -40,7 +40,8 @@ def _local_date(user: User, reference: str | None) -> str:
 
 
 def cmd_help(console: Console, user: User, arg: str) -> bool:
-    console.print(HELP_TEXT)
+    # markup=False so Rich doesn't eat the "[caption]" / "[date]" in the text
+    console.print(HELP_TEXT, markup=False)
     return True
 
 

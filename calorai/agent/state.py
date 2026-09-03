@@ -23,6 +23,7 @@ class AgentState(TypedDict, total=False):
     image_path: str | None
 
     # Set by the context-loading nodes (run before the agent node).
+    user_name: str | None    # the name given at onboarding (None for a guest)
     memory_card: str         # compact profile block, always injected (Phase 2)
     today_totals: dict | None
     last_meal: dict | None   # {"id", "description", "items": [{"name", "quantity"}]}

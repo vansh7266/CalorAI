@@ -123,3 +123,47 @@ def test_reflection_skips_when_nothing_durable(monkeypatch):
     monkeypatch.setattr(memory, "_run_reflection_model", lambda _p: _Stub().invoke(_p))
     assert run_reflection(user, "turn_y", "had some cake", "Logged ~350 cal of cake.") is None
     assert repo.get_active_memory(user) == []
+
+
+def test_refining_a_routine_consolidates_instead_of_piling_up():
+    """The user's real Windows session: 'my usual is toast and milk' then
+    'toast and milk is only for breakfast' left three overlapping routine rows.
+    It should end as one."""
+    user = ctxmod.get_context().user_id
+
+    save_memory.invoke({"kind": "routine", "content": "usual meal is toast and milk"})
+    save_memory.invoke(
+        {"kind": "routine", "content": "usual breakfast is toast and milk", "meal_type": "breakfast"}
+    )
+    rows = repo.get_active_memory(user, types=["routine"])
+    assert len(rows) == 1
+    assert "breakfast" in rows[0].content
+
+    # a vague inference must not displace the stated routine
+    from calorai.agent.memory import run_reflection
+
+    class _Stub:
+        def invoke(self, _p):
+            return memory._Reflection(
+                should_save=True, kind="routine",
+                content="toast and milk is only for breakfast, not for other times",
+            )
+
+    import calorai.agent.memory as m
+    _orig = m._run_reflection_model
+    m._run_reflection_model = lambda _p: _Stub().invoke(_p)
+    try:
+        run_reflection(user, "turn_z", "toast and milk is only for breakfast", "Updated!")
+    finally:
+        m._run_reflection_model = _orig
+
+    rows = repo.get_active_memory(user, types=["routine"])
+    assert len(rows) == 1
+    assert rows[0].learned_via == "stated"
+
+
+def test_distinct_routines_are_kept_separate():
+    user = ctxmod.get_context().user_id
+    save_memory.invoke({"kind": "routine", "content": "usual breakfast is 2 eggs and toast", "meal_type": "breakfast"})
+    save_memory.invoke({"kind": "routine", "content": "usual lunch is dal and rice", "meal_type": "lunch"})
+    assert len(repo.get_active_memory(user, types=["routine"])) == 2

@@ -73,6 +73,17 @@ def test_load_context_clean_when_healthy(monkeypatch):
     assert out["context_degraded"] is None
 
 
+def test_load_context_exposes_onboarding_name():
+    named = repo.create_user("Vineet", "UTC")
+    guest = repo.create_user("guest", "UTC")
+    for user, expected in ((named, "Vineet"), (guest, None)):
+        token = ctxmod.set_context(_ctx(user.id))
+        try:
+            assert _load_context({})["user_name"] == expected
+        finally:
+            ctxmod.reset_context(token)
+
+
 def test_run_turn_never_raises(monkeypatch):
     monkeypatch.setattr(runnermod, "build_app", lambda: (_ for _ in ()).throw(RuntimeError("graph broke")))
     reply = runnermod.run_turn("hi", user_id="usr_x", thread_id="usr_x")

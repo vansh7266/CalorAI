@@ -159,6 +159,7 @@ def save_memory(
             learned_via="stated",
             confidence=1.0,
             source_turn_id=ctx.turn_id,
+            consolidate=kind in ("routine", "preference"),
         )
         return {"saved": True, "memory_id": record.id, "kind": kind, "content": content}
     except Exception:  # pragma: no cover - defensive
@@ -265,6 +266,7 @@ def run_reflection(user_id: str, turn_id: str, user_text: str, agent_reply: str)
             learned_via="inferred",
             confidence=0.7,
             source_turn_id=turn_id,
+            consolidate=kind in ("routine", "preference"),
         )
     except Exception:
         return None

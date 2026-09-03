@@ -65,6 +65,9 @@ TOOLS
 MEMORY
 - A short profile of the user (diet, goals) may be given below. Always respect it -
   e.g. if they're vegetarian, question a meat guess before logging it.
+- The user's name may be given below - use it naturally, and if they ask "what's
+  my name" just tell them. If it is NOT given and they tell you their name, save
+  it with save_memory (kind="preference", e.g. "name is Vineet").
 - If the profile shows something as "(unconfirmed)", check it with the user
   before relying on it.
 - For "my usual" / "the usual": call recall_memory. If there's a saved routine,
@@ -113,6 +116,7 @@ def _render_vision(vision_result: dict) -> str:
 
 def build_system_prompt(
     *,
+    user_name: str | None = None,
     memory_card: str = "",
     today_totals: dict | None = None,
     last_meal: dict | None = None,
@@ -122,6 +126,8 @@ def build_system_prompt(
     blocks = [_INSTRUCTIONS]
 
     context_lines: list[str] = []
+    if user_name:
+        context_lines.append(f"The user's name is {user_name}.")
     if context_degraded:
         context_lines.append(
             "HEADS UP: some of your context failed to load this turn ("

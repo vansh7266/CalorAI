@@ -61,8 +61,16 @@ def _load_context(state: AgentState) -> dict:
     it must not pass silently either: each failure is logged, and the parts that
     failed are recorded so the agent can hedge instead of stating wrong totals."""
     ctx = get_context()
-    out: dict = {"today_totals": None, "last_meal": None, "memory_card": "", "context_degraded": None}
+    out: dict = {"today_totals": None, "last_meal": None, "memory_card": "",
+                 "context_degraded": None, "user_name": None}
     degraded: list[str] = []
+
+    try:
+        user = repo.get_user(ctx.user_id)
+        if user and user.name and user.name.lower() != "guest":
+            out["user_name"] = user.name
+    except Exception:
+        logger.warning("load_context: user row failed for %s", ctx.user_id, exc_info=True)
 
     try:
         totals = repo.daily_totals(ctx.user_id, ctx.local_date).rounded()
@@ -142,6 +150,7 @@ def _recent_window(messages: list) -> list:
 
 def _agent(state: AgentState) -> dict:
     system = build_system_prompt(
+        user_name=state.get("user_name"),
         memory_card=state.get("memory_card", ""),
         today_totals=state.get("today_totals"),
         last_meal=state.get("last_meal"),
