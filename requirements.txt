@@ -28,5 +28,8 @@ PyYAML==6.0.3
 # --- Images ---
 pillow==12.3.0
 
+# --- Graph rendering (for the ASCII / mermaid agent diagram) ---
+grandalf==0.8
+
 # --- Dev / tests ---
 pytest==9.1.1
