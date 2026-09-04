@@ -24,9 +24,10 @@ def env(tmp_path, monkeypatch):
 
 def _user_with_meal():
     user = repo.create_user("g", "UTC")
-    token = ctxmod.set_context(
-        TurnContext(user.id, "t", "UTC", datetime(2026, 9, 3, 13, 0, tzinfo=timezone.utc))
-    )
+    # log "today" - the grader computes today from the real clock, so a fixed
+    # date here would put the meal on the wrong day once that date passes
+    now = datetime.now(timezone.utc).replace(hour=13, minute=0, second=0, microsecond=0)
+    token = ctxmod.set_context(TurnContext(user.id, "t", "UTC", now))
     try:
         log_meal.invoke({"items": [{"name": "roti", "quantity": 3, "unit": "piece"}]})
     finally:

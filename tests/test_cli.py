@@ -29,9 +29,8 @@ def _console() -> Console:
 
 
 def _seed_meal(user):
-    token = ctxmod.set_context(
-        TurnContext(user.id, "t", "UTC", datetime(2026, 9, 3, 13, 0, tzinfo=timezone.utc))
-    )
+    now = datetime.now(timezone.utc).replace(hour=13, minute=0, second=0, microsecond=0)
+    token = ctxmod.set_context(TurnContext(user.id, "t", "UTC", now))
     try:
         log_meal.invoke({"items": [{"name": "roti", "quantity": 2, "unit": "piece"}]})
     finally:

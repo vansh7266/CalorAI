@@ -93,7 +93,7 @@ def _first_run(console: Console) -> User:
         Panel(
             f"Nice to meet you, [bold]{escape(name)}[/bold].\n"
             f"Your CalorAI id is [bold cyan]{user.id}[/bold cyan] - save it to resume on another session\n"
-            f"with [dim]calorai --user {user.id}[/dim].",
+            f"with [dim]python cli.py --user {user.id}[/dim].",
             border_style="cyan",
         )
     )

@@ -114,7 +114,7 @@ Examples:
 /img "~/My Photos/dinner plate.jpg"          # quote paths that contain spaces
 ```
 
-- The path can be relative to where you started `calorai`, or a full/absolute path
+- The path can be relative to where you started the CLI, or a full/absolute path
   pasted as-is (`~` expands; on Windows `C:\Users\...\lunch.jpg` is fine). Wrap it
   in quotes only if it contains spaces.
 - Supported formats: `.jpg` `.jpeg` `.png` `.webp` `.gif` `.bmp`, up to 20 MB.
@@ -127,9 +127,9 @@ Examples:
 Send a single message and exit — useful for scripting or a quick check:
 
 ```bash
-calorai --message "had 2 rotis and dal"
-calorai --user usr_xxxxxxxx --message "how am I doing today?"
-calorai --user usr_xxxxxxxx --image ~/Downloads/lunch.jpg --message "half was my brother's"
+python cli.py --message "had 2 rotis and dal"
+python cli.py --user usr_xxxxxxxx --message "how am I doing today?"
+python cli.py --user usr_xxxxxxxx --image ~/Downloads/lunch.jpg --message "half was my brother's"
 ```
 
 ### Slash commands
@@ -150,11 +150,12 @@ Dates accept `today`, `yesterday`, a weekday, or `YYYY-MM-DD`.
 ### Resuming
 
 ```bash
-calorai --user usr_xxxxxxxx
+python cli.py --user usr_xxxxxxxx
 ```
 
-The last-used id is also saved locally, so a plain `calorai` resumes it
-automatically. `python cli.py ...` works everywhere `calorai` does.
+The last-used id is also saved locally, so a plain `python cli.py` resumes it
+automatically. If you ran `pip install -e .`, the `calorai` command works
+everywhere `python cli.py` does.
 
 ---
 
@@ -443,15 +444,15 @@ Public LangSmith trace: https://smith.langchain.com/public/b72a0407-be4d-4793-87
 
 ## Time breakdown
 
-_Approximately 10 hours, across more than one sitting._
+_Approximately 13 hours, across more than one sitting._
 
 | Area | Hours |
 |---|---:|
 | Understanding the brief, research, design discussion, locking decisions | ~3 |
 | Implementation — graph, tools, database, memory, image path, CLI | ~4 |
-| Review cycles, testing, and fixes | ~2 |
-| README and testing docs | ~1 |
-| **Total** | **~10** |
+| Review cycles, testing, and fixes | ~3 |
+| README, testing docs, and the walkthrough video | ~3 |
+| **Total** | **~13** |
 
 ---
 
