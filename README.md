@@ -58,7 +58,7 @@ SARVAM_API_KEY=your_key_here
 Then start it:
 
 ```bash
-calorai
+python cli.py
 ```
 
 On first run it asks your name and prints a user id (`usr_...`). Keep that id — it
